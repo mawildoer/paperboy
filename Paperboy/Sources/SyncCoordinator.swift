@@ -32,6 +32,8 @@ final class SyncCoordinator: ObservableObject {
     @Published private(set) var lastFetchNote: String?
     @Published private(set) var signedIn: [LoginService: Bool] = [:]
     @Published private(set) var startupError: String?
+    @Published private(set) var importError: String?
+    @Published private(set) var importActivity: String?
 
     let bluetooth = BluetoothTransport()
     private let substack = SubstackSource()
@@ -87,15 +89,49 @@ final class SyncCoordinator: ObservableObject {
 
     static let appGroup = "group.app.paperboy.readerc67aad"
     private var processingShared = false
+    private var rescanShared = false
+
+    /// Files/Open In supplies security-scoped URLs; copy before releasing access.
+    func importDocument(_ url: URL) {
+        Task {
+            guard url.isFileURL,
+                  let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else { return }
+            do {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try PDFInbox.queueFile(at: url, container: container, title: url.deletingPathExtension().lastPathComponent)
+                }.value
+                importError = nil
+                await processSharedInbox()
+                if case .connected = bluetooth.state { readerConnected() }
+            } catch { importError = error.localizedDescription }
+        }
+    }
+
+    private func removeQueued(_ page: SharedPage, record: URL, container: URL) {
+        try? FileManager.default.removeItem(at: record)
+        if let filename = page.pdfFile, let pdf = try? PDFInbox.fileURL(named: filename, container: container) {
+            try? FileManager.default.removeItem(at: pdf)
+        }
+    }
 
     /// Turn every page the share extension left in the app group's Inbox into an article, loaded
     /// for the reader. A page that cannot be read is tried again on later runs, three times in all.
     func processSharedInbox() async {
-        guard let store, !processingShared,
+        if processingShared { rescanShared = true; return }
+        guard let store,
               let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup)
         else { return }
         processingShared = true
-        defer { processingShared = false }
+        defer {
+            processingShared = false
+            importActivity = nil
+            if rescanShared {
+                rescanShared = false
+                Task { await processSharedInbox() }
+            }
+        }
         let inbox = container.appendingPathComponent("Inbox", isDirectory: true)
         let files = ((try? FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "json" }
@@ -111,23 +147,26 @@ final class SyncCoordinator: ObservableObject {
             if let known = await store.article(id), !known.isRetired {
                 // Shared again: put it (back) on the reader, and keep it there if it was read.
                 try? await store.setLoad(id, known.read ? .lock : .load)
-                try? FileManager.default.removeItem(at: file)
+                removeQueued(page, record: file, container: container)
                 AppLog.post("Shared: \(known.title) is already in the list; loading it")
                 continue
             }
             do {
+                importActivity = page.pdfFile == nil ? "Importing shared page…" : "Converting PDF on this device…"
                 var article = try await article(forShared: page)
                 article.url = canonical
                 article = await ArticleImagePipeline.prepare(article)
                 try? await store.remove(id)  // a retired entry would block the add
                 try await store.add(article, load: .load)
-                try? FileManager.default.removeItem(at: file)
+                removeQueued(page, record: file, container: container)
+                importError = nil
                 AppLog.post("Shared: stored \(article.title) [\(article.source)]")
             } catch {
                 page.attempts += 1
+                importError = "Could not import \(page.title ?? "shared document"): \(error.localizedDescription)"
                 AppLog.post("Shared: \(URL(string: page.url)?.host ?? "page") could not be read (try \(page.attempts) of 3): \(error)")
                 if page.attempts >= 3 {
-                    try? FileManager.default.removeItem(at: file)
+                    removeQueued(page, record: file, container: container)
                 } else if let updated = try? JSONEncoder().encode(page) {
                     try? updated.write(to: file, options: .atomic)
                 }
@@ -138,6 +177,15 @@ final class SyncCoordinator: ObservableObject {
 
     /// The page as shared when it carries the article; otherwise fetched the way its site needs.
     private func article(forShared page: SharedPage) async throws -> Article {
+        if let filename = page.pdfFile {
+            guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else { throw CocoaError(.fileReadUnknown) }
+            let file = try PDFInbox.fileURL(named: filename, container: container)
+            return try await Task.detached(priority: .userInitiated) {
+                let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard size <= PDFInbox.maxBytes else { throw PDFInbox.Failure.tooLarge }
+                return try PDFImporter.article(data: Data(contentsOf: file, options: .mappedIfSafe), url: page.url, title: page.title, now: page.sharedAt)
+            }.value
+        }
         if let html = page.html,
            let article = try? await ReaderModeExtractor().article(html: html, url: page.url, title: page.title) {
             return article
@@ -157,9 +205,17 @@ final class SyncCoordinator: ObservableObject {
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
         var data = Data()
+        var isPDF = response.mimeType?.lowercased() == "application/pdf" || url.pathExtension.lowercased() == "pdf"
         for try await byte in bytes {
-            if data.count >= 4_000_000 { throw URLError(.dataLengthExceedsMaximum) }
+            if data.count >= (isPDF ? PDFInbox.maxBytes : 4_000_000) { throw URLError(.dataLengthExceedsMaximum) }
             data.append(byte)
+            if data.count == 1024 && PDFInbox.hasPDFHeader(data) { isPDF = true }
+        }
+        if isPDF || PDFInbox.hasPDFHeader(data) {
+            let pdf = data
+            return try await Task.detached(priority: .userInitiated) {
+                try PDFImporter.article(data: pdf, url: page.url, title: page.title, now: page.sharedAt)
+            }.value
         }
         return try await ReaderModeExtractor().article(html: String(decoding: data, as: UTF8.self), url: page.url, title: page.title)
     }

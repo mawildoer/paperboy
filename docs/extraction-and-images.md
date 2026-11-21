@@ -6,10 +6,18 @@ Images are resolved relative to the source URL, capped at twelve, fetched sequen
 
 Two colors necessarily merge series that differ only by color; labels, symbols, and line patterns are preferable. The reader can scale figures to its display width, so very dense charts still need device testing. Automatic classification uses metadata hints and a sparse pale-background heuristic, not semantic understanding of a chart.
 
-No LLM or cloud extraction is enabled. A future explicit visual fallback could use rendered-page/PDF images plus text/OCR to recover difficult layouts. It would need user consent for uploads, provider configuration, a cost limit, prompt-injection handling, preservation of original figures, and checks against omitted text or invented chart values. PDFs need their own import path; this change does not add PDF support.
+## PDF sharing
+
+Safari/Files can send a PDF attachment or file URL. The share extension uses an explicit PDF UTI activation predicate and copies the temporary provider file into its App Group before the provider callback returns. The main app also registers PDF Open In support and copies security-scoped documents while access is held. Queued PDFs are content-hashed so sharing the same bytes twice does not create duplicate articles.
+
+Conversion happens in the main app on a worker task. PDFKit extracts native text; pages with little native text use local Apple Vision OCR. Core Graphics renders each page to a compact monochrome PNG, keeping chart/table geometry without having OCR reconstruct it. Text is included separately for reflow. No PDF pages are uploaded to a service. PDFKit text/OCR reading order can be imperfect for complex columns and formulas; page images remain available.
+
+Limits are one PDF at a time, 20 MB input, 20 pages, and 512 KiB of processed images. Oversized, locked, copy-restricted, invalid, or unrenderable documents return a visible import error rather than silently dropping pages. Open Paperboy after sharing to finish conversion and sync. Successful or duplicate imports remove the queued copy; failed imports are retried up to three times before the temporary queue item is removed. The original Safari/Files document is untouched.
+
+Cloud/LLM extraction remains disabled, in accordance with the on-device-only requirement.
 
 ## Verification
 
-133 Swift tests and four DOM extraction tests pass. Coverage includes the actual WebKit bridge, no publisher script execution, removal of ads/recommendations, lazy/responsive image URLs, exclusion of tracking pixels, data-URL image preparation, compressed PNG decoding, photo size limits, EPUB manifests/assets, and malformed input. An example 1200×700 chart shrank from about 52 KiB to 3.5 KiB at 1056px width. Physical e-reader rendering and Safari SVG/canvas capture still need device checks.
+137 Swift tests and four DOM extraction tests pass. PDF tests cover native text, scanned-page OCR, monochrome EPUB assets, stable-identity temporary-file handoff, malformed/oversized input, and page-limit rejection. A generated-plist test verifies PDF, link, text and webpage activation plus main-app document registration. Coverage includes the actual WebKit bridge, no publisher script execution, removal of ads/recommendations, lazy/responsive image URLs, exclusion of tracking pixels, data-URL image preparation, compressed PNG decoding, photo size limits, EPUB manifests/assets, and malformed input. An example 1200×700 chart shrank from about 52 KiB to 3.5 KiB at 1056px width. Physical e-reader rendering and Safari SVG/canvas capture still need device checks.
 
-Processing applies to new imports and fetched articles. Previously cached EPUBs are not retroactively rewritten by this update. Cloud extraction, OCR, PDF import, and automatic refresh of already-cached EPUBs remain separate work.
+Processing applies to new imports and fetched articles. Previously cached EPUBs are not retroactively rewritten by this update. Cloud extraction and automatic refresh of already-cached EPUBs remain separate work.

@@ -1,3 +1,4 @@
+import PaperboyCore
 import UIKit
 import UniformTypeIdentifiers
 
@@ -11,6 +12,8 @@ final class ShareViewController: UIViewController {
     static let maxHTMLBytes = 4_000_000
 
     private let label = UILabel()
+    private var started = false
+    private var failureMessage: String?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -39,11 +42,13 @@ final class ShareViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        guard !started else { return }
+        started = true
         Task { @MainActor in
             let saved = await self.saveSharedPage()
             self.label.text = saved
                 ? "Sent to Paperboy.\nIt goes onto the reader at the next sync."
-                : "Paperboy could not read a link from this."
+                : (failureMessage ?? "Paperboy could not import this item.")
             try? await Task.sleep(for: .seconds(saved ? 1.1 : 2))
             self.extensionContext?.completeRequest(returningItems: nil)
         }
@@ -51,6 +56,28 @@ final class ShareViewController: UIViewController {
 
     private func saveSharedPage() async -> Bool {
         let providers = (extensionContext?.inputItems as? [NSExtensionItem] ?? []).flatMap { $0.attachments ?? [] }
+        let pdfs = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.pdf.identifier) }
+        if let provider = pdfs.first {
+            guard pdfs.count == 1 else { failureMessage = "Share one PDF at a time."; return false }
+            do {
+                guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else { return false }
+                let title = provider.suggestedName ?? "Shared PDF"
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    provider.loadFileRepresentation(forTypeIdentifier: UTType.pdf.identifier) { url, error in
+                        guard let url else { continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown)); return }
+                        do {
+                            // The URL expires when this callback returns, so copy it here, not after await.
+                            try PDFInbox.queueFile(at: url, container: container, title: title)
+                            continuation.resume()
+                        } catch { continuation.resume(throwing: error) }
+                    }
+                }
+                return true
+            } catch {
+                failureMessage = error.localizedDescription
+                return false
+            }
+        }
         var page: [String: Any] = [:]
 
         // Safari: the result of SharePage.js.
@@ -65,6 +92,15 @@ final class ShareViewController: UIViewController {
         if page["url"] == nil {
             for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
                 if let url = try? await provider.loadItem(forTypeIdentifier: UTType.url.identifier) as? URL {
+                    if url.isFileURL {
+                        do {
+                            guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else { return false }
+                            let scoped = url.startAccessingSecurityScopedResource()
+                            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                            try PDFInbox.queueFile(at: url, container: container, title: provider.suggestedName)
+                            return true
+                        } catch { failureMessage = error.localizedDescription; return false }
+                    }
                     page["url"] = url.absoluteString
                     break
                 }

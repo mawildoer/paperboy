@@ -25,6 +25,8 @@ jobs:
       - name: Generate iOS project
         working-directory: Paperboy
         run: xcodegen generate
+      - name: Verify PDF sharing and document registration
+        run: swift tests/share-activation.swift
       - name: Build iOS app and share extension
         run: >-
           xcodebuild -project Paperboy/Paperboy.xcodeproj -scheme Paperboy

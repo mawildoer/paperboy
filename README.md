@@ -38,7 +38,7 @@ The Mac tool supports `scan`, `list`, `demo`, `push`, and `sync`; see `paperboy-
 
 Allow Bluetooth, open Articles on the reader, and pair from Paperboy. Sign into Substack in the app or share a page from Safari to Paperboy. Load articles onto the reader; lock one to keep it after completion. Unfinished loaded articles retain their reading position on the reader.
 
-See [extraction and image limits](docs/extraction-and-images.md). PDF imports and cloud/LLM extraction are not yet enabled.
+See [extraction and image limits](docs/extraction-and-images.md). PDFs can be shared from Safari or Files, or opened in Paperboy. Native PDF text is extracted locally; scans use on-device OCR, and monochrome page images retain charts. Current limits: one PDF, 20 MB, 20 pages, and 512 KiB of processed images. Cloud/LLM extraction remains disabled.
 
 ## Distribution status
 

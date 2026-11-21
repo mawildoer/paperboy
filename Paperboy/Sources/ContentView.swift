@@ -16,6 +16,12 @@ struct ContentView: View {
                 if let error = coordinator.startupError {
                     Section { Text(error).foregroundStyle(.red) }
                 }
+                if coordinator.importActivity != nil || coordinator.importError != nil {
+                    Section("Import") {
+                        if let activity = coordinator.importActivity { ProgressView(activity) }
+                        if let error = coordinator.importError { Text(error).foregroundStyle(.red) }
+                    }
+                }
                 readerSection
                 sourcesSection
                 articlesSection

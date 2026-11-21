@@ -21,6 +21,7 @@ struct PaperboyApp: App {
                 .environmentObject(coordinator)
                 .environmentObject(coordinator.bluetooth)
                 .environmentObject(AppLog.shared)
+                .onOpenURL { coordinator.importDocument($0) }
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {

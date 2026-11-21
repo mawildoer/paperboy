@@ -198,11 +198,13 @@ public struct SharedPage: Codable, Sendable, Equatable {
     public var title: String?
     /// The page as the browser showed it (Safari only); nil when only the link was shared.
     public var html: String?
+    public var pdfFile: String?
     public var sharedAt: Date
     /// How many times turning it into an article has failed.
     public var attempts: Int
 
-    public init(url: String, title: String? = nil, html: String? = nil, sharedAt: Date = Date(), attempts: Int = 0) {
+    public init(url: String, title: String? = nil, html: String? = nil, sharedAt: Date = Date(), attempts: Int = 0, pdfFile: String? = nil) {
+        self.pdfFile = pdfFile
         self.url = url
         self.title = title
         self.html = html
@@ -211,11 +213,12 @@ public struct SharedPage: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case url, title, html, sharedAt, attempts
+        case url, title, html, sharedAt, attempts, pdfFile
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        pdfFile = try c.decodeIfPresent(String.self, forKey: .pdfFile)
         url = try c.decode(String.self, forKey: .url)
         title = try c.decodeIfPresent(String.self, forKey: .title)
         html = try c.decodeIfPresent(String.self, forKey: .html)
@@ -226,6 +229,7 @@ public struct SharedPage: Codable, Sendable, Equatable {
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(pdfFile, forKey: .pdfFile)
         try c.encode(url, forKey: .url)
         try c.encodeIfPresent(title, forKey: .title)
         try c.encodeIfPresent(html, forKey: .html)

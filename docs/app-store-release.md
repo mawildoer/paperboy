@@ -35,3 +35,7 @@ Local verification on 2026-11-20: 126 shared tests passed; the Mac sync tool bui
 ## Image/reader build update — 2026-11-21
 
 Build 2 adds monochrome EPUB images and local Readability extraction. 133 Swift tests and four DOM extraction tests pass; Release iOS/extension and Mac-tool builds pass. A signed development archive was created and installed on the paired phone. App Store export is blocked by Xcode reporting `No Accounts` and missing distribution profiles for the main app and share extension, despite the owner's reported membership approval. Refresh/sign in to the approved account in Xcode, then retry distribution export. No TestFlight upload has occurred.
+
+## PDF sharing update — 2026-11-21
+
+Build 3 registers explicit PDF share and Open In support. Conversion is local: native PDF text, Apple Vision OCR for scans, and monochrome page images. The signed app and extension archive build passed, 137 Swift tests and four webpage tests passed, and a generated-plist test matched PDFs while preserving URL/text/webpage sharing. Build 3 was installed and launched on the connected iPhone. Safari's physical share-sheet UI and e-reader PDF-derived article display still need user verification.

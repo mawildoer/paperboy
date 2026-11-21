@@ -15,3 +15,5 @@ You can sign out of publishers and forget the reader in Settings. Signing out do
 Support/contact: to be finalized by the app owner before release. This draft is not an App Store privacy-label submission or a representation that publisher integrations are approved.
 
 Reader-mode extraction and image conversion run locally. Source images are requested directly from their hosting sites, using applicable publisher session cookies. No LLM or cloud document-processing service is enabled.
+
+PDFs shared from Safari/Files are copied into the local App Group inbox, then processed on the device with PDFKit, Core Graphics, and Apple Vision OCR. Reflowable text and monochrome page images are sent only to the paired reader. No PDF pages or OCR inputs are uploaded to an AI service. Temporary queue files are removed after a successful/duplicate import, or after three unsuccessful import attempts; the original shared file is not modified.

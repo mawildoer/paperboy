@@ -42,7 +42,7 @@ targets:
         PRODUCT_NAME: Paperboy
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -52,6 +52,13 @@ targets:
         CFBundleDisplayName: Paperboy
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSSupportsOpeningDocumentsInPlace: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: PDF document
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - com.adobe.pdf
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -73,6 +80,9 @@ targets:
     platform: iOS
     sources:
       - path: ShareExtension
+    dependencies:
+      - package: PaperboyCore
+        product: PaperboyCore
     entitlements:
       path: PaperboyShare.entitlements
       properties:
@@ -83,7 +93,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: app.paperboy.readerc67aad.share
         PRODUCT_NAME: PaperboyShare
         MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
         SKIP_INSTALL: YES
@@ -98,7 +108,12 @@ targets:
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
           NSExtensionAttributes:
             NSExtensionJavaScriptPreprocessingFile: SharePage
-            NSExtensionActivationRule:
-              NSExtensionActivationSupportsWebURLWithMaxCount: 1
-              NSExtensionActivationSupportsWebPageWithMaxCount: 1
-              NSExtensionActivationSupportsText: true
+            NSExtensionActivationRule: >-
+              SUBQUERY(extensionItems, $item,
+                SUBQUERY($item.attachments, $attachment,
+                  ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.adobe.pdf" OR
+                  ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url" OR
+                  ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.text" OR
+                  ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.property-list"
+                ).@count > 0
+              ).@count > 0
