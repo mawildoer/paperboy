@@ -10,7 +10,7 @@ let package = Package(
     ],
     targets: [
         // Everything that needs neither UIKit nor WebKit nor a radio.
-        .target(name: "PaperboyCore"),
+        .target(name: "PaperboyCore", resources: [.process("Resources")]),
         // CoreBluetooth transport shared by the iOS app and the Mac CLI.
         .target(name: "PaperboyBLE", dependencies: ["PaperboyCore"]),
         .testTarget(name: "PaperboyCoreTests", dependencies: ["PaperboyCore"]),

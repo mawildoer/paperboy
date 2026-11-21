@@ -18,3 +18,5 @@ DerivedData/
 AuthKey_*.p8
 Paperboy/Info.plist
 Paperboy/ShareExtension/Info.plist
+
+node_modules/

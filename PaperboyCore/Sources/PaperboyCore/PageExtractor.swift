@@ -16,10 +16,10 @@ public enum PageExtractorError: Error, Equatable, Sendable, CustomStringConverti
 public enum PageExtractor {
     public static let minimumWords = 80
 
-    public static func article(pageHTML html: String, url: String, sharedTitle: String? = nil, now: Date = Date()) throws -> Article {
+    public static func article(pageHTML html: String, url: String, sharedTitle: String? = nil, now: Date = Date(), useStructuredNYT: Bool = true) throws -> Article {
         let host = URLComponents(string: url)?.host?.lowercased() ?? ""
         // The New York Times ships the article as data in the page; that is cleaner than its markup.
-        if host.hasSuffix("nytimes.com"), let parsed = try? NYTParser.parse(pageHTML: html) {
+        if useStructuredNYT, host.hasSuffix("nytimes.com"), let parsed = try? NYTParser.parse(pageHTML: html) {
             return parsed.article(fallbackURL: url, fetchedAt: now)
         }
 
@@ -33,12 +33,15 @@ public enum PageExtractor {
         let date = firstNonEmpty(meta["article:published_time"], meta["og:article:published_time"], meta["date"])
             .flatMap(parseDate) ?? now
 
-        let body = HTMLCleaner.clean(mainContent(of: html))
+        let cleaned = HTMLCleaner.cleanWithImages(mainContent(of: html), baseURL: url)
+        let body = cleaned.xhtml
         let words = HTMLCleaner.plainText(body).split(whereSeparator: \.isWhitespace).count
-        guard words >= minimumWords else { throw PageExtractorError.noArticleText(words: words) }
-        return Article(
+        guard words >= (cleaned.sources.isEmpty ? minimumWords : 10) else { throw PageExtractorError.noArticleText(words: words) }
+        var article = Article(
             url: URLCanonicalizer.canonicalize(url), source: source, title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             author: author, date: date, bodyXHTML: body)
+        article.imageSources = cleaned.sources
+        return article
     }
 
     // MARK: Body
@@ -67,7 +70,7 @@ public enum PageExtractor {
             }
         }
         if best.isEmpty { best = html }
-        for name in ["header", "footer", "aside", "nav", "figcaption"] {
+        for name in ["header", "footer", "aside", "nav"] {
             best = removing(element: name, from: best)
         }
         return best

@@ -2,7 +2,7 @@
 
 <img src="Paperboy/Sources/Assets.xcassets/AppIcon.appiconset/paperboy-v2-1024.png" alt="Paperboy icon" width="128" height="128">
 
-An iPhone companion for reading articles on a Xteink X3 instead of a phone. Paperboy caches text as EPUB and delivers it to the reader over Bluetooth, ready to read offline. It includes a Safari share extension and signed-in Substack fetching. NYT support is experimental and is not verified for public release.
+An iPhone companion for reading articles on a Xteink X3 instead of a phone. Paperboy caches text as EPUB and delivers it to the reader over Bluetooth, ready to read offline. It includes a Safari share extension, local Mozilla Readability extraction, signed-in Substack fetching, and compact black-and-white article images with extra detail for charts. NYT support is experimental and is not verified for public release.
 
 Requires the matching [Paperboy CrossPoint firmware](https://github.com/mawildoer/crosspoint-reader). This is an independent project, not an official Xteink, Substack, NYT, or CrossPoint product. Background delivery depends on iOS scheduling and reader availability; it is not guaranteed on a fixed interval.
 
@@ -37,6 +37,8 @@ The Mac tool supports `scan`, `list`, `demo`, `push`, and `sync`; see `paperboy-
 ## Use
 
 Allow Bluetooth, open Articles on the reader, and pair from Paperboy. Sign into Substack in the app or share a page from Safari to Paperboy. Load articles onto the reader; lock one to keep it after completion. Unfinished loaded articles retain their reading position on the reader.
+
+See [extraction and image limits](docs/extraction-and-images.md). PDF imports and cloud/LLM extraction are not yet enabled.
 
 ## Distribution status
 

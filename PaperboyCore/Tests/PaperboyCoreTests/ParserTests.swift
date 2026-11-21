@@ -75,7 +75,7 @@ import Testing
         #expect(article.date == ISODate.parse("2026-11-14T15:30:00Z"))
         #expect(article.bodyXHTML.hasPrefix("<p><em>A subtitle with &lt;angle&gt; brackets</em></p>\n"))
         expectWellFormedFragment(article.bodyXHTML)
-        #expect(elementNames(in: article.bodyXHTML).isSubset(of: allowedElements))
+        #expect(elementNames(in: article.bodyXHTML).isSubset(of: allowedElements.union(["img"])))
         // And it packages.
         let zip = try ZipReader(try EpubBuilder.build(article))
         expectWellFormed(String(decoding: try zip.contents(named: "OEBPS/article.xhtml"), as: UTF8.self))

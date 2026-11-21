@@ -135,6 +135,9 @@ final class NYTSource: NSObject, WKNavigationDelegate {
         try await load(url)
         // The data is in the initial HTML, but give the page a moment anyway.
         try await Task.sleep(for: .milliseconds(400))
+        let html = try await evaluate("document.documentElement.outerHTML")
+        if NYTParser.looksLikeCaptcha(html) { throw NYTError.captcha }
+        if let article = try? await ReaderModeExtractor().article(html: html, url: urlString) { return article }
         let text = try await evaluate(NYTParser.extractionJavaScript)
         if text.isEmpty { throw NYTError.noPreloadedData }
         return try NYTParser.parse(preloadedData: text).article(fallbackURL: urlString)
@@ -208,6 +211,7 @@ final class NYTSource: NSObject, WKNavigationDelegate {
                 var article = try await fetchArticle(item.url)
                 // Keep the id tied to the URL discovery used, so "already known" stays true.
                 article.url = URLCanonicalizer.canonicalize(item.url)
+                article = await ArticleImagePipeline.prepare(article)
                 try await store.add(article)
                 summary.added += 1
                 budget -= 1

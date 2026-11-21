@@ -118,6 +118,7 @@ final class SyncCoordinator: ObservableObject {
             do {
                 var article = try await article(forShared: page)
                 article.url = canonical
+                article = await ArticleImagePipeline.prepare(article)
                 try? await store.remove(id)  // a retired entry would block the add
                 try await store.add(article, load: .load)
                 try? FileManager.default.removeItem(at: file)
@@ -138,7 +139,7 @@ final class SyncCoordinator: ObservableObject {
     /// The page as shared when it carries the article; otherwise fetched the way its site needs.
     private func article(forShared page: SharedPage) async throws -> Article {
         if let html = page.html,
-           let article = try? PageExtractor.article(pageHTML: html, url: page.url, sharedTitle: page.title) {
+           let article = try? await ReaderModeExtractor().article(html: html, url: page.url, title: page.title) {
             return article
         }
         guard let url = URL(string: page.url), let host = url.host?.lowercased() else { throw URLError(.badURL) }
@@ -153,8 +154,14 @@ final class SyncCoordinator: ObservableObject {
         request.setValue(
             "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
             forHTTPHeaderField: "User-Agent")
-        let (data, _) = try await URLSession.shared.data(for: request)
-        return try PageExtractor.article(pageHTML: String(decoding: data, as: UTF8.self), url: page.url, sharedTitle: page.title)
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+        var data = Data()
+        for try await byte in bytes {
+            if data.count >= 4_000_000 { throw URLError(.dataLengthExceedsMaximum) }
+            data.append(byte)
+        }
+        return try await ReaderModeExtractor().article(html: String(decoding: data, as: UTF8.self), url: page.url, title: page.title)
     }
 
     /// The load / lock / off control of one article. The reader follows at the next sync; when it

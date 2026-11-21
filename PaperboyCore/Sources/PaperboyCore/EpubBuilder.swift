@@ -11,6 +11,8 @@ public struct Article: Sendable, Equatable {
     public var date: Date
     /// Cleaned block-level XHTML (the output of `HTMLCleaner`).
     public var bodyXHTML: String
+    public var images: [ArticleImage] = []
+    public var imageSources: [ArticleImageSource] = []
     public var language: String
 
     public init(url: String, source: String, title: String, author: String, date: Date, bodyXHTML: String, language: String = "en") {
@@ -27,7 +29,7 @@ public struct Article: Sendable, Equatable {
 }
 
 /// Builds a single-chapter EPUB 3 that also carries an EPUB 2 NCX, so both old and new readers
-/// find a table of contents. Text only. The output depends only on the article, never on the
+/// find a table of contents. Text with optional monochrome PNG images. The output depends only on the article, never on the
 /// clock, so packaging the same article twice gives the same bytes (and the same CRC).
 public enum EpubBuilder {
     public static let mimetype = "application/epub+zip"
@@ -37,7 +39,17 @@ public enum EpubBuilder {
         "mimetype", "META-INF/container.xml", "OEBPS/content.opf", "OEBPS/toc.ncx", "OEBPS/nav.xhtml", "OEBPS/article.xhtml",
     ]
 
+    public enum Failure: Error { case invalidImage }
     public static func build(_ article: Article) throws -> Data {
+        var paths = Set<String>()
+        guard article.images.reduce(0, { $0 + $1.data.count }) <= 512 * 1024 else { throw Failure.invalidImage }
+        for image in article.images {
+            guard image.path.range(of: #"^images/[A-Za-z0-9_-]+\.png$"#, options: .regularExpression) != nil,
+                  paths.insert(image.path).inserted, image.data.count > 33,
+                  image.data.starts(with: [137,80,78,71,13,10,26,10]), image.data[24] == 1, image.data[25] == 0 else {
+                throw Failure.invalidImage
+            }
+        }
         var zip = ZipWriter(modified: article.date)
         // The mimetype entry must come first, stored, with no extra field.
         try zip.add(name: "mimetype", contents: Data(mimetype.utf8))
@@ -46,6 +58,9 @@ public enum EpubBuilder {
         try zip.add(name: "OEBPS/toc.ncx", contents: Data(ncx(article).utf8))
         try zip.add(name: "OEBPS/nav.xhtml", contents: Data(nav(article).utf8))
         try zip.add(name: "OEBPS/article.xhtml", contents: Data(chapter(article).utf8))
+        for image in article.images {
+            try zip.add(name: "OEBPS/" + image.path, contents: image.data)
+        }
         return try zip.finish()
     }
 
@@ -94,6 +109,9 @@ public enum EpubBuilder {
         lines.append("    <item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>")
         lines.append("    <item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>")
         lines.append("    <item id=\"article\" href=\"article.xhtml\" media-type=\"application/xhtml+xml\"/>")
+        for (index, image) in article.images.enumerated() {
+            lines.append("    <item id=\"image\(index)\" href=\"\(e(image.path))\" media-type=\"image/png\"/>")
+        }
         lines.append("  </manifest>")
         lines.append("  <spine toc=\"ncx\">")
         lines.append("    <itemref idref=\"article\"/>")
@@ -163,7 +181,7 @@ public enum EpubBuilder {
     static func chapter(_ article: Article) -> String {
         let e = HTMLCleaner.escape
         let lang = languageTag(article)
-        let body = article.bodyXHTML.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = ArticleImageMarkup.resolving(article).trimmingCharacters(in: .whitespacesAndNewlines)
         return """
             <?xml version="1.0" encoding="UTF-8"?>
             <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="\(lang)" lang="\(lang)">

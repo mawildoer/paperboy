@@ -215,14 +215,17 @@ public enum SubstackParser {
         if let subtitle = post.subtitle {
             body += "<p><em>\(HTMLCleaner.escape(subtitle))</em></p>\n"
         }
-        body += HTMLCleaner.clean(html)
+        let cleaned = HTMLCleaner.cleanWithImages(html, baseURL: post.canonicalURL)
+        body += cleaned.xhtml
         let url = URLCanonicalizer.canonicalize(post.canonicalURL)
-        return Article(
+        var article = Article(
             url: url,
             source: post.publicationName ?? post.host ?? "Substack",
             title: post.title.isEmpty ? "Untitled" : post.title,
             author: post.authors.joined(separator: ", "),
             date: post.postDate ?? fetchedAt,
             bodyXHTML: body)
+        article.imageSources = cleaned.sources
+        return article
     }
 }

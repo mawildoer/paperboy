@@ -1,0 +1,6 @@
+{
+  "name": "paperboy-extraction-tests",
+  "private": true,
+  "scripts": {"test": "node --test tests/reader-mode.test.cjs"},
+  "devDependencies": {"jsdom": "26.1.0"}
+}

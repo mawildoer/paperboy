@@ -189,8 +189,8 @@ import Testing
         expectWellFormedFragment(out)
         #expect(elementNames(in: out).isSubset(of: allowedElements))
         let text = HTMLCleaner.plainText(out)
-        for expected in ["five", "term", "definition", "sum", "det", "cap", "“quoted”", "foot"] { #expect(text.contains(expected)) }
-        for dropped in ["fallback", "abbr title"] { #expect(!text.contains(dropped)) }
+        for expected in ["five", "term", "definition", "sum", "det", "cap", "“quoted”"] { #expect(text.contains(expected)) }
+        for dropped in ["fallback", "abbr title", "foot"] { #expect(!text.contains(dropped)) }
     }
 
     /// A realistic Substack body, with the furniture Substack puts around the text.

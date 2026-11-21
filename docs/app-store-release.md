@@ -31,3 +31,7 @@ Local verification on 2026-11-20: 126 shared tests passed; the Mac sync tool bui
 - [App Privacy Details](https://developer.apple.com/app-store/app-privacy-details/)
 - [Required reason APIs](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api)
 - [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/), especially 2.1 (review access), 4.2 (functionality), 5.1 (privacy), and 5.2.2 (third-party services).
+
+## Image/reader build update — 2026-11-21
+
+Build 2 adds monochrome EPUB images and local Readability extraction. 133 Swift tests and four DOM extraction tests pass; Release iOS/extension and Mac-tool builds pass. A signed development archive was created and installed on the paired phone. App Store export is blocked by Xcode reporting `No Accounts` and missing distribution profiles for the main app and share extension, despite the owner's reported membership approval. Refresh/sign in to the approved account in Xcode, then retry distribution export. No TestFlight upload has occurred.

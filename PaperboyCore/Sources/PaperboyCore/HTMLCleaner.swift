@@ -11,6 +11,7 @@ public enum HTMLCleaner {
         /// Keep `<a href>` for http(s) links. Off by default: the reader has no network, and
         /// plain text is the cheapest thing for it to lay out.
         public var keepLinks = false
+        public var imagePaths: [String: String] = [:]
         /// Elements nested deeper than this are flattened into their ancestor.
         public var maxDepth = 150
 
@@ -26,6 +27,29 @@ public enum HTMLCleaner {
         var emitter = Emitter(options: options)
         emitter.walk(root.children)
         return emitter.finish()
+    }
+
+    public static func cleanWithImages(_ html: String, baseURL: String) -> (xhtml: String, sources: [ArticleImageSource]) {
+        let root = HTMLTreeBuilder.build(html, maxDepth: 150)
+        var sources: [ArticleImageSource] = []
+        var paths: [String: String] = [:]
+        func visit(_ children: [HTMLChild]) {
+            for child in children {
+                guard case .element(let node) = child, !Emitter.isDropped(node) else { continue }
+                if node.name == "img", sources.count < 12 {
+                    let raw = ArticleImageSource.rawSource(node.attributes)
+                    if paths[raw] == nil, let source = ArticleImageSource(raw: raw, attributes: node.attributes, baseURL: baseURL, index: sources.count) {
+                        paths[raw] = source.path
+                        sources.append(source)
+                    }
+                }
+                visit(node.children)
+            }
+        }
+        visit(root.children)
+        var options = Options()
+        options.imagePaths = paths
+        return (clean(html, options: options), sources)
     }
 
     /// The text of a document with all markup removed and whitespace collapsed.
@@ -135,7 +159,7 @@ private struct Emitter {
 
     static let dropped: Set<String> = [
         "script", "style", "iframe", "button", "form", "svg", "math", "noscript", "template", "video", "audio",
-        "object", "embed", "select", "input", "textarea", "canvas", "head", "title", "nav", "img", "picture",
+        "object", "embed", "select", "input", "textarea", "canvas", "head", "title", "nav",
         "source", "track", "link", "meta", "map", "area", "dialog", "label", "frame", "frameset", "applet",
     ]
 
@@ -154,10 +178,19 @@ private struct Emitter {
         "image-link-expand", "subscribe-widget", "subscription-widget", "subscription-widget-wrap",
         "subscription-widget-wrap-editor", "share-dialog", "native-video-embed", "native-audio-embed", "audio-embed",
         "youtube-wrap", "vimeo-wrap", "comments-section",
+        "advertisement", "ad-container", "ad-slot", "ad-wrapper", "related-posts", "related-articles",
+        "recommended-posts", "recommended-articles", "read-next", "newsletter-signup", "social-share",
+        "cookie-banner", "cookie-consent", "sidebar", "outbrain", "taboola", "navigation",
     ]
 
     static func isDropped(_ node: HTMLNode) -> Bool {
-        if dropped.contains(node.name) { return true }
+        if dropped.contains(node.name) || ["aside", "footer"].contains(node.name) { return true }
+        let role = (node.attributes["role"] ?? "").lowercased()
+        if ["navigation", "banner", "contentinfo", "complementary", "dialog"].contains(role) { return true }
+        let identifier = (node.attributes["id"] ?? "").lowercased()
+        if droppedClassTokens.contains(identifier) { return true }
+        let style = (node.attributes["style"] ?? "").lowercased().replacingOccurrences(of: " ", with: "")
+        if style.contains("display:none") || style.contains("visibility:hidden") { return true }
         if let classes = node.attributes["class"] {
             for token in classes.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }) {
                 let name = token.lowercased()
@@ -265,6 +298,11 @@ private struct Emitter {
         if Self.isDropped(node) { return }
         let name = node.name
         switch name {
+        case "img":
+            let source = ArticleImageSource.rawSource(node.attributes)
+            if let path = options.imagePaths[source] {
+                emitBlock("<p><img src=\"\(HTMLCleaner.escape(path))\" alt=\"\(HTMLCleaner.escape(node.attributes["alt"] ?? ""))\"/></p>\n")
+            }
         case "p":
             beginParagraph("p")
             walk(node.children)
@@ -399,6 +437,8 @@ enum HTMLTreeBuilder {
     ]
 
     static func build(_ html: String, maxDepth: Int) -> HTMLNode {
+        // Recursive emission must fit a Swift concurrency worker's small stack.
+        let depthLimit = min(64, max(8, maxDepth))
         let root = HTMLNode(name: "#root")
         var stack: [HTMLNode] = [root]
         var tokenizer = HTMLTokenizer(html)
@@ -440,7 +480,7 @@ enum HTMLTreeBuilder {
                 if name == "li" { closeOpenListItem() }
                 let node = HTMLNode(name: name, attributes: attributes)
                 current().children.append(.element(node))
-                if !voidElements.contains(name), stack.count < maxDepth {
+                if !voidElements.contains(name), stack.count < depthLimit {
                     stack.append(node)
                 }
             case .end(let name):

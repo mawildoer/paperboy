@@ -223,6 +223,7 @@ actor SubstackSource {
                 }
                 // Keep the id tied to the URL discovery used, so "already known" stays true.
                 article.url = URLCanonicalizer.canonicalize(candidate.ref.canonicalURL)
+                article = await ArticleImagePipeline.prepare(article)
                 try await store.add(article, load: isFavourite && settings.autoLoadFavourites ? .load : .off)
                 summary.added += 1
                 AppLog.post("Substack stored: \(article.title) [\(candidate.ref.audience ?? "?")]")
