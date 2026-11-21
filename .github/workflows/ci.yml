@@ -1,0 +1,26 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test-and-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test shared package
+        run: swift test --package-path PaperboyCore
+      - name: Build Mac sync tool
+        run: swift build --package-path paperboy-cli
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Generate iOS project
+        working-directory: Paperboy
+        run: xcodegen generate
+      - name: Build iOS app and share extension
+        run: >-
+          xcodebuild -project Paperboy/Paperboy.xcodeproj -scheme Paperboy
+          -configuration Release -sdk iphoneos -destination 'generic/platform=iOS'
+          -derivedDataPath .build/ios CODE_SIGNING_ALLOWED=NO build
