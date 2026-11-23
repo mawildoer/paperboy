@@ -36,12 +36,12 @@ The Mac tool supports `scan`, `list`, `demo`, `push`, and `sync`; see `paperboy-
 
 ## Use
 
-Allow Bluetooth, open Articles on the reader, and pair from Paperboy. Sign into Substack in the app or share a page from Safari to Paperboy. Load articles onto the reader; lock one to keep it after completion. Unfinished loaded articles retain their reading position on the reader.
+Allow Bluetooth, open Library on the reader, and pair from Paperboy. Sign into Substack in the app or share a page from Safari to Paperboy. Load articles onto the reader; lock one to keep it after completion. Unfinished loaded articles retain their reading position on the reader.
 
 See [extraction and image limits](docs/extraction-and-images.md). PDFs can be shared from Safari or Files, or opened in Paperboy. Native PDF text is extracted locally; scans use on-device OCR, and monochrome page images retain charts. Current limits: one PDF, 20 MB, 20 pages, and 512 KiB of processed images. Cloud/LLM extraction remains disabled.
 
 ## Distribution status
 
-Development source, not an App Store release. See [the release checklist](docs/app-store-release.md). The repository includes privacy manifests and unsigned CI builds; paid distribution signing, service permissions, privacy review, TestFlight testing, and App Review are still required.
+Development source, not an App Store release. See [the release checklist and CI setup](docs/app-store-release.md). Normal CI runs tests and an unsigned iOS build. The **Publish TestFlight** workflow archives and uploads with automatic signing on a `v*` tag or a manual run on `main`, once the Apple API secrets are configured. App Review and public App Store release remain separate steps.
 
 No account sessions, signing certificates, device backups, or personal article libraries are included.

@@ -12,6 +12,28 @@ Local verification on 2026-11-20: 126 shared tests passed; the Mac sync tool bui
 - CI runs package tests, builds the Mac tool, and builds the Release iOS app/extension without signing.
 - `TEAM_ID=YOUR_PAID_TEAM ./scripts/archive.sh` creates a signed archive. This script does not upload or submit anything.
 
+## TestFlight from GitHub Actions
+
+The **Publish TestFlight** workflow (`.github/workflows/testflight.yml`) runs on app tags beginning with `v` or manually on `main`. It runs the extraction, Swift, and share-registration checks, archives the app and extension with Xcode automatic signing, and uploads to App Store Connect. It does not submit to App Review or publish to the public App Store. Apple processing and TestFlight tester/group configuration follow the upload.
+
+In this repository's **Settings → Secrets and variables → Actions**, create these repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `ASC_PRIVATE_KEY` | Complete PEM contents of the downloaded `AuthKey_….p8` file, including the BEGIN/END lines. |
+| `ASC_KEY_ID` | The team API key's Key ID. |
+| `ASC_ISSUER_ID` | The App Store Connect Issuer ID. |
+
+Create a **team** API key under App Store Connect **Users and Access → Integrations → App Store Connect API**. Its role must permit provisioning and cloud-managed distribution signing; an Admin team key has the needed access. Xcode uses it for both the app and share extension. The app record uses `app.paperboy.readerc67aad`, with team `PTVJRD6TRB` and shared app group `group.app.paperboy.readerc67aad`.
+
+GitHub cannot reveal stored secret values. The workflow writes the key to a private temporary file, removes it on exit, uses a temporary signing keychain, and uploads only debug symbols as a workflow artifact. Do not put keys, certificates, signing identities, or profiles in repository files or issue comments. Revoke a compromised API key in App Store Connect and replace the three secrets.
+
+Each run receives a build number of `100 + workflow run number`, followed by the run attempt (for example, `101.1`). A retry has a new build number. The app and extension receive the same value. After adding the secrets, open **Actions → Publish TestFlight → Run workflow**, choose `main`, and run it. Successful upload does not mean Apple has finished processing the build.
+
+For an equivalent local upload, set the three `ASC_*` variables and a new `BUILD_NUMBER`, select full Xcode using `DEVELOPER_DIR`, then run `bash scripts/testflight.sh`. Optional `TEAM_ID` and `TESTFLIGHT_OUTPUT` override the team and output directory. The script refuses to replace an existing archive and stops if archiving or uploading fails.
+
+References: [Apple's cloud-signing automation](https://developer.apple.com/videos/play/wwdc2021/10204/), [App Store Connect API setup](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api/), and [upload processing](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/).
+
 ## Remaining gates
 
 1. **Distribution account.** The local Xcode configuration was a free Personal Team on 2026-11-20. App Store and TestFlight require Apple Developer Program membership; enrollment and agreements need the account holder. Confirm the distribution team and retain or migrate bundle identifiers deliberately.
