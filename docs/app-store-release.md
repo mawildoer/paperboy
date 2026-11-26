@@ -98,3 +98,24 @@ sync from firmware replies. The corrected CI and TestFlight jobs were started in
 the background; do not infer successful upload/Apple processing until their
 statuses are checked. The user explicitly preferred the USB developer build and
 requested not to wait for the full TestFlight cycle.
+
+
+## 2026-11-26 Touched library, Bump, and search
+
+The app adds an always-visible metadata search bar. Query tokens can match title,
+author, and source across fields; normalization handles case/accents and small
+misspellings/transpositions. Article bodies and previews are not searched. While
+searching, results replace the reader/account sections so matches are visible.
+
+Loaded/locked articles have a separate Bump button. Pending promotions persist
+across launches, are sent after any necessary upload, and clear only on a matching
+acknowledgment. No EPUB bytes or reading progress are rewritten. Bump does not
+change load/read state or publication/arrival dates. The nonce order follows tap
+order even within one second. Existing v1 firmware continues ordinary sync/OTA;
+bumps wait for v2 firmware (Paperboy 0.3.0).
+
+Local validation: 153 Swift tests, Mac CLI build, and Release iOS app/extension
+build passed. Tests cover metadata search, persistent/coalesced requests, stale
+acknowledgments, upload-before-bump ordering, legacy firmware, and exact frame
+bytes. User requested TestFlight distribution followed by Bluetooth firmware
+installation this time; no USB developer deployment is part of this update.

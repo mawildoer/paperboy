@@ -36,7 +36,7 @@ The Mac tool supports `scan`, `list`, `demo`, `push`, and `sync`; see `paperboy-
 
 ## Use
 
-Allow Bluetooth, open Library on the reader, and pair from Paperboy. Sign into Substack or Medium in the app, or share a page from Safari to Paperboy. Medium monitors your signed-in Following page; no separate subscriptions are configured. Email sign-in links can be pasted into the Medium login sheet. Load articles onto the reader; lock one to keep it after completion. Unfinished loaded articles retain their reading position on the reader.
+Allow Bluetooth, open Library on the reader, and pair from Paperboy. Sign into Substack or Medium in the app, or share a page from Safari to Paperboy. Medium monitors your signed-in Following page; no separate subscriptions are configured. Email sign-in links can be pasted into the Medium login sheet. Find articles with the search bar (title, author, and source, including small typos). Load articles onto the reader; lock one to keep it after completion. Bump a loaded article to the top of the reader’s Touched view without changing its reading position. The reader offers Touched, Added, and Published views, all newest first. Unfinished loaded articles retain their reading position on the reader.
 
 Settings also offers Bluetooth firmware updates for the matching reader firmware (USB bootstrap required once). Updates use the project's GitHub release, verify its SHA-256, stage on the reader, and confirm the new version after reboot. Keep the reader in Library and connected to USB or charged above 30%.
 

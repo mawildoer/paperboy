@@ -42,6 +42,8 @@ public final class FakeDevice: @unchecked Sendable {
     private var config: Config
     private var stored: [ArticleID: Stored] = [:]
     private var order: [ArticleID] = []
+    private var _touches: [ArticleID: UInt32] = [:]
+    public var touches: [ArticleID: UInt32] { lock.withLock { _touches } }
     private var incoming: Incoming?
     /// What `/Articles/incoming.tmp` would hold after an interrupted transfer.
     private var leftoverTemp: Data?
@@ -162,6 +164,10 @@ public final class FakeDevice: @unchecked Sendable {
                         freeSpaceMB: UInt32(clamping: config.freeBytes / (1024 * 1024)), firmwareVersion: config.firmwareVersion))
             ]
 
+        case .touch(let touch):
+            guard stored[touch.id] != nil, touch.nonce != 0 else { return [.touchResult(.badRequest)] }
+            _touches[touch.id] = max(_touches[touch.id] ?? 0, touch.nonce)
+            return [.touchResult(.ok)]
         case .list:
             // As many 9-byte items per notification as fit, then LIST_END with the total.
             // An empty list is just LIST_END 0.
@@ -260,7 +266,7 @@ public final class FakeDevice: @unchecked Sendable {
             _radioOn = false
             return []
 
-        case .helloAck, .listItems, .listEnd, .putReady, .putProgress, .putResult, .deleteResult:
+        case .touchResult, .helloAck, .listItems, .listEnd, .putReady, .putProgress, .putResult, .deleteResult:
             _violations.append("device-to-phone frame \(frame.type) received from the phone")
             return []
         }

@@ -6,7 +6,7 @@ import Foundation
 /// characteristic) carries exactly one frame: one type byte followed by the payload.
 /// All integers are little-endian.
 public enum SyncProtocol {
-    public static let version: UInt8 = 1
+    public static let version: UInt8 = 2
 
     public static let serviceUUID = "8E400001-7B2A-4B1F-9C5D-5A1EF0C0DE01"
     /// Phone → device. Write and write-without-response, encrypted.
@@ -31,6 +31,7 @@ public enum FrameType: UInt8, Sendable, CaseIterable {
     case putBegin = 0x10
     case putData = 0x11
     case putEnd = 0x12
+    case touch = 0x21
     case delete = 0x20
     case bye = 0x30
     // Device → phone
@@ -40,6 +41,7 @@ public enum FrameType: UInt8, Sendable, CaseIterable {
     case putReady = 0x90
     case putProgress = 0x91
     case putResult = 0x92
+    case touchResult = 0xA1
     case deleteResult = 0xA0
 }
 
@@ -151,6 +153,8 @@ public enum Frame: Equatable, Sendable {
     case putBegin(PutBegin)
     case putData(Data)
     case putEnd
+    case touch(SyncTouch)
+    case touchResult(SyncStatus)
     case delete(ArticleID)
     case bye
     case helloAck(HelloAck)
@@ -168,6 +172,8 @@ public enum Frame: Equatable, Sendable {
         case .putBegin: return .putBegin
         case .putData: return .putData
         case .putEnd: return .putEnd
+        case .touch: return .touch
+        case .touchResult: return .touchResult
         case .delete: return .delete
         case .bye: return .bye
         case .helloAck: return .helloAck
@@ -200,6 +206,11 @@ public enum Frame: Equatable, Sendable {
             try out.appendShortString(p.author, field: "author")
         case .putData(let bytes):
             out.append(bytes)
+        case .touch(let touch):
+            out.append(contentsOf: touch.id.bytes)
+            out.appendLE(touch.nonce)
+        case .touchResult(let status):
+            out.append(status.rawValue)
         case .delete(let id):
             out.append(contentsOf: id.bytes)
         case .helloAck(let ack):
@@ -260,6 +271,14 @@ public enum Frame: Equatable, Sendable {
         case .putEnd:
             try requireLength(0)
             return .putEnd
+        case .touch:
+            try requireLength(12)
+            guard let bytes = reader.take(ArticleID.byteCount), let id = ArticleID(bytes: bytes), let nonce = reader.u32() else { throw fail() }
+            return .touch(SyncTouch(id: id, nonce: nonce))
+        case .touchResult:
+            try requireLength(1)
+            guard let status = reader.u8() else { throw fail() }
+            return .touchResult(SyncStatus(rawValue: status))
         case .delete:
             try requireLength(ArticleID.byteCount)
             guard let idBytes = reader.take(ArticleID.byteCount), let id = ArticleID(bytes: idBytes) else { throw fail() }
@@ -317,6 +336,8 @@ public enum Frame: Equatable, Sendable {
             return "PUT_BEGIN id=\(p.id) size=\(p.size) crc=\(String(format: "%08x", p.crc32)) time=\(p.time) source=\"\(p.source)\" title=\"\(p.title)\" author=\"\(p.author)\""
         case .putData(let d): return "PUT_DATA \(d.count) bytes"
         case .putEnd: return "PUT_END"
+        case .touch(let touch): return "TOUCH id=\(touch.id) nonce=\(touch.nonce)"
+        case .touchResult(let status): return "TOUCH_RESULT \(status)"
         case .delete(let id): return "DELETE id=\(id)"
         case .bye: return "BYE"
         case .helloAck(let a):

@@ -21,7 +21,7 @@ public struct FirmwareUpdateSession: Sendable {
         for _ in 0..<64 {
             let bytes = try await transport.receive(timeout: .seconds(15))
             if case .helloAck(let ack) = try? Frame.decode(bytes) {
-                guard ack.version == SyncProtocol.version else { throw SyncError.versionMismatch(device: ack.version) }
+                guard ack.version == SyncProtocol.version || ack.version == 1 else { throw SyncError.versionMismatch(device: ack.version) }
                 previous = ack.firmwareVersion
                 break
             }

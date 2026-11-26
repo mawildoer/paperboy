@@ -58,6 +58,8 @@ private let sampleID = ArticleID(hex: "0102030405060708")!
         // HELLO: version 1, unix time 0x6918B4C0 little-endian.
         (.hello(version: 1, unixTime: 0x6918_B4C0), "01 01 c0 b4 18 69"),
         (.list, "02"),
+        (.touch(SyncTouch(id: sampleID, nonce: 0x01020304)), "21 01 02 03 04 05 06 07 08 04 03 02 01"),
+        (.touchResult(.ok), "a1 00"),
         // PUT_BEGIN: id, size 70000 (0x00011170), crc 0xDEADBEEF, time 0x6918B4C0, "NYT", "Hi é", "Al".
         (
             .putBegin(
@@ -103,11 +105,11 @@ private let sampleID = ArticleID(hex: "0102030405060708")!
         let expected: [(FrameType, UInt8)] = [
             (.hello, 0x01), (.list, 0x02), (.putBegin, 0x10), (.putData, 0x11), (.putEnd, 0x12), (.delete, 0x20), (.bye, 0x30),
             (.helloAck, 0x81), (.listItems, 0x82), (.listEnd, 0x83), (.putReady, 0x90), (.putProgress, 0x91), (.putResult, 0x92),
-            (.deleteResult, 0xA0),
+            (.deleteResult, 0xA0), (.touch, 0x21), (.touchResult, 0xA1),
         ]
         #expect(expected.count == FrameType.allCases.count)
         for (type, byte) in expected { #expect(type.rawValue == byte) }
-        #expect(SyncProtocol.version == 1)
+        #expect(SyncProtocol.version == 2)
         #expect(SyncProtocol.serviceUUID == "8E400001-7B2A-4B1F-9C5D-5A1EF0C0DE01")
         #expect(SyncProtocol.rxCharacteristicUUID == "8E400002-7B2A-4B1F-9C5D-5A1EF0C0DE01")
         #expect(SyncProtocol.txCharacteristicUUID == "8E400003-7B2A-4B1F-9C5D-5A1EF0C0DE01")

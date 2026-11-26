@@ -92,7 +92,7 @@ private func enc(_ frame: Frame) -> Data {
         let report = await SyncSession(transport: transport, source: source, config: fastConfig(), log: { log.add($0) }).run()
 
         #expect(report.completed, "\(String(describing: report.error))")
-        #expect(report.device == HelloAck(version: 1, batteryPercent: 87, freeSpaceMB: 512, firmwareVersion: "paperboy-fake-1.0"))
+        #expect(report.device == HelloAck(version: SyncProtocol.version, batteryPercent: 87, freeSpaceMB: 512, firmwareVersion: "paperboy-fake-1.0"))
         #expect(report.listing.isEmpty)
         #expect(report.uploaded == items.map(\.item.id))
         #expect(report.alreadyPresent.isEmpty)
@@ -131,7 +131,7 @@ private func enc(_ frame: Frame) -> Data {
         #expect(collapsed == [.putBegin, .putData, .putEnd, .putBegin, .putData, .putEnd, .putBegin, .putData, .putEnd])
 
         // The log shows the conversation and never the article bytes.
-        #expect(log.all.contains { $0.hasPrefix("→ HELLO v1") })
+        #expect(log.all.contains { $0.hasPrefix("→ HELLO v\(SyncProtocol.version)") })
         #expect(log.all.contains { $0.hasPrefix("← HELLO_ACK") })
         #expect(log.all.contains { $0.hasPrefix("← PUT_RESULT ok") })
         #expect(log.all.last == "→ BYE")
@@ -434,11 +434,11 @@ private func enc(_ frame: Frame) -> Data {
 
     @Test func versionMismatchStopsBeforeAnythingElse() async throws {
         let device = FakeDevice()
-        device.setProtocolVersion(2)
+        device.setProtocolVersion(99)
         let transport = FakeDeviceTransport(device: device)
         let report = await SyncSession(transport: transport, source: StaticSyncSource(items: [item(1, size: 100)]), config: fastConfig()).run()
-        #expect(report.error == .versionMismatch(device: 2))
-        #expect(report.device?.version == 2)
+        #expect(report.error == .versionMismatch(device: 99))
+        #expect(report.device?.version == 99)
         #expect(device.receivedTypes == [.hello, .bye])
     }
 
@@ -530,7 +530,7 @@ private func enc(_ frame: Frame) -> Data {
             Issue.record("expected a protocol violation, got \(String(describing: report.error))")
             return
         }
-        #expect(transport.sent == [.hello(version: 1, unixTime: 1_794_744_000), .list, .bye])
+        #expect(transport.sent == [.hello(version: SyncProtocol.version, unixTime: 1_794_744_000), .list, .bye])
     }
 
     @Test func garbageAndStrayFramesAreIgnored() async throws {
@@ -763,7 +763,7 @@ private func enc(_ frame: Frame) -> Data {
         let begin = PutBegin(id: id, size: 9000, crc32: CRC32.checksum(body), time: 1_794_744_000, source: "S", title: "T", author: "A")
 
         #expect(try exchange(.hello(version: 1, unixTime: 1_794_744_000))
-            == [.helloAck(HelloAck(version: 1, batteryPercent: 87, freeSpaceMB: 512, firmwareVersion: "paperboy-fake-1.0"))])
+            == [.helloAck(HelloAck(version: SyncProtocol.version, batteryPercent: 87, freeSpaceMB: 512, firmwareVersion: "paperboy-fake-1.0"))])
         #expect(try exchange(.list) == [.listEnd(total: 0)])
         #expect(try exchange(.putBegin(begin)) == [.putReady(.ok)])
         // 4000 + 4000 + 1000 bytes: progress after the second chunk (8000 ≥ 4096 past 0), not after the first.

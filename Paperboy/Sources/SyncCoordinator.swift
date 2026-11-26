@@ -247,15 +247,29 @@ final class SyncCoordinator: ObservableObject {
         Task {
             try? await store.setLoad(id, state)
             await refreshArticles()
-            loadChangeSync?.cancel()
-            loadChangeSync = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled, let self, self.syncTask == nil, !self.firmwareUpdating,
-                      case .connected = self.bluetooth.state else { return }
-                self.syncTask = Task { [weak self] in
-                    await self?.runSession()
-                    self?.syncTask = nil
-                }
+            scheduleLibrarySync()
+        }
+    }
+
+    func bump(_ id: ArticleID) {
+        guard let store else { return }
+        Task {
+            do { try await store.bump(id); await refreshArticles(); scheduleLibrarySync() }
+            catch { importError = "Could not bump article: \(error)" }
+        }
+    }
+
+    private func scheduleLibrarySync() {
+        loadChangeSync?.cancel()
+        loadChangeSync = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            guard let self else { return }
+            await self.syncTask?.value
+            guard !Task.isCancelled, self.syncTask == nil, !self.firmwareUpdating,
+                  case .connected = self.bluetooth.state else { return }
+            self.syncTask = Task { [weak self] in
+                await self?.runSession()
+                self?.syncTask = nil
             }
         }
     }
@@ -425,6 +439,7 @@ final class SyncCoordinator: ObservableObject {
         }
         var parts: [String] = []
         if !report.uploaded.isEmpty { parts.append("\(report.uploaded.count) sent") }
+        if !report.bumped.isEmpty { parts.append("\(report.bumped.count) bumped") }
         if !report.deleted.isEmpty { parts.append("\(report.deleted.count) removed") }
         if !report.failures.isEmpty { parts.append("\(report.failures.count) failed") }
         if report.deviceFull { parts.append("reader is full") }

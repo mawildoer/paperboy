@@ -182,3 +182,79 @@ private func sample(_ n: Int, date: Date = t0) -> Article {
         #expect(long.count <= 51 && long.hasSuffix("…"))
     }
 }
+
+@Suite struct BumpTests {
+    @Test func bumpPersistsAndOnlyAcknowledgesTheMatchingRequest() async throws {
+        let directory = try makeTempDirectory("paperboy-bump")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let article = try await store.add(sample(1), fetchedAt: t0, load: .lock)
+        try await store.markRead(article.id, at: t0)
+        let original = try await store.epub(for: article.id)
+        try await store.bump(article.id, at: t0.addingTimeInterval(10))
+        let request = try #require(await store.pendingBumps().first)
+        try await store.bump(article.id, at: t0.addingTimeInterval(10))
+        try await store.didBump(request)
+        let current = try #require(await store.article(article.id))
+        #expect(current.pendingBump == request.nonce + 1)
+        #expect(current.read && current.load == .lock)
+        #expect(current.date == article.date && current.fetchedAt == article.fetchedAt)
+        #expect(try await store.epub(for: article.id) == original)
+        let reopened = try ArticleStore(directory: directory)
+        #expect(await reopened.pendingBumps().first?.nonce == request.nonce + 1)
+    }
+    @Test func syncPromotesAnExistingArticleWithoutUploadingItsEpub() async throws {
+        let directory = try makeTempDirectory("paperboy-bump-sync")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let article = try await store.add(sample(2), load: .load)
+        let device = FakeDevice()
+        device.seed(id: article.id, data: Data("existing EPUB and saved position".utf8))
+        try await store.bump(article.id)
+        let report = await SyncSession(transport: FakeDeviceTransport(device: device), source: ArticleStoreSyncSource(store: store)).run()
+        #expect(report.completed)
+        #expect(report.bumped == [article.id])
+        #expect(report.uploaded.isEmpty)
+        #expect(!device.receivedTypes.contains(.putBegin))
+        #expect(await store.pendingBumps().isEmpty)
+        #expect(device.article(article.id)?.data == Data("existing EPUB and saved position".utf8))
+    }
+    @Test func oldFirmwareKeepsBumpsQueuedWhileBasicSyncStillCompletes() async throws {
+        let directory = try makeTempDirectory("paperboy-bump-old")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let article = try await store.add(sample(2), load: .load)
+        let device = FakeDevice(); device.setProtocolVersion(1); device.seed(id: article.id)
+        try await store.bump(article.id)
+        let report = await SyncSession(transport: FakeDeviceTransport(device: device), source: ArticleStoreSyncSource(store: store)).run()
+        #expect(report.completed && report.bumped.isEmpty)
+        #expect(await store.pendingBumps().count == 1)
+        #expect(!device.receivedTypes.contains(.touch))
+    }
+    @Test func uploadThenBumpQueuesInTheRightOrder() async throws {
+        let directory = try makeTempDirectory("paperboy-bump-upload")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let article = try await store.add(sample(3), load: .load)
+        try await store.bump(article.id)
+        let device = FakeDevice()
+        let report = await SyncSession(transport: FakeDeviceTransport(device: device), source: ArticleStoreSyncSource(store: store)).run()
+        #expect(report.completed && report.uploaded == [article.id] && report.bumped == [article.id])
+        #expect(device.receivedTypes.firstIndex(of: .putEnd)! < device.receivedTypes.firstIndex(of: .touch)!)
+    }
+}
+
+@Suite struct BumpOrderingTests {
+    @Test func tapsInTheSameSecondHaveAnUnambiguousOrderAcrossArticles() async throws {
+        let directory = try makeTempDirectory("paperboy-bump-order")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let a = try await store.add(sample(1), load: .load)
+        let b = try await store.add(sample(2), load: .load)
+        try await store.bump(a.id, at: t0)
+        try await store.bump(b.id, at: t0)
+        let pending = await store.pendingBumps()
+        #expect(pending.map(\.id) == [a.id, b.id])
+        #expect(pending[0].nonce < pending[1].nonce)
+    }
+}

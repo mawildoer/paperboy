@@ -42,6 +42,8 @@ public struct StoredArticle: Codable, Sendable, Equatable, Identifiable {
     public var load: LoadState
     /// The first lines of the text, for the list in the app.
     public var preview: String
+    public var bumpedAt: Date?
+    public var pendingBump: UInt32?
 
     public var isRetired: Bool { retiredAt != nil }
     /// Should the reader hold this article now? A read article stays only while locked.
@@ -69,6 +71,8 @@ public struct StoredArticle: Codable, Sendable, Equatable, Identifiable {
         self.crc32 = crc32
         self.load = load
         self.preview = preview
+        self.bumpedAt = nil
+        self.pendingBump = nil
     }
 
     // An index written before load states existed has neither field: those articles are off.
@@ -88,6 +92,8 @@ public struct StoredArticle: Codable, Sendable, Equatable, Identifiable {
         size = try c.decode(Int.self, forKey: .size)
         crc32 = try c.decode(UInt32.self, forKey: .crc32)
         load = try c.decodeIfPresent(LoadState.self, forKey: .load) ?? .off
+        bumpedAt = try c.decodeIfPresent(Date.self, forKey: .bumpedAt)
+        pendingBump = try c.decodeIfPresent(UInt32.self, forKey: .pendingBump)
         preview = try c.decodeIfPresent(String.self, forKey: .preview) ?? ""
     }
 }
@@ -206,6 +212,30 @@ public actor ArticleStore {
         articles[id] = stored
         try save()
         return stored
+    }
+
+    /// Queue a metadata-only promotion; leave the EPUB, load state and progress untouched.
+    public func bump(_ id: ArticleID, at now: Date = Date()) throws {
+        guard var article = articles[id], !article.isRetired else { throw ArticleStoreError.unknownArticle(id) }
+        let prior = articles.values.reduce(UInt32(0)) { max($0, UInt32(clamping: Int64($1.bumpedAt?.timeIntervalSince1970 ?? 0))) }
+        let nonce = max(UInt32(clamping: Int64(now.timeIntervalSince1970)), prior == .max ? prior : prior + 1)
+        article.bumpedAt = Date(timeIntervalSince1970: Double(nonce))
+        article.pendingBump = nonce
+        articles[id] = article
+        try save()
+    }
+
+    public func pendingBumps() -> [SyncTouch] {
+        all().filter(\.wantedOnDevice).compactMap { article in
+            article.pendingBump.map { SyncTouch(id: article.id, nonce: $0) }
+        }.sorted { $0.nonce < $1.nonce }
+    }
+
+    public func didBump(_ touch: SyncTouch) throws {
+        guard var article = articles[touch.id], article.pendingBump == touch.nonce else { return }
+        article.pendingBump = nil
+        articles[touch.id] = article
+        try save()
     }
 
     public func markRead(_ id: ArticleID, at now: Date = Date()) throws {
@@ -381,7 +411,7 @@ public struct ArticleStoreSyncSource: SyncDataSource {
         for item in listing where !deletes.contains(item.id) {
             if await !store.isKnown(item.id) { deletes.append(item.id) }
         }
-        return SyncPlan(puts: puts, deletes: deletes)
+        return SyncPlan(puts: puts, deletes: deletes, touches: await store.pendingBumps())
     }
 
     public func payload(for id: ArticleID) async throws -> Data {
@@ -391,6 +421,8 @@ public struct ArticleStoreSyncSource: SyncDataSource {
     public func didUpload(_ id: ArticleID) async {
         try? await store.setOnDevice(id, true)
     }
+
+    public func didTouch(_ touch: SyncTouch) async { try? await store.didBump(touch) }
 
     public func didDelete(_ id: ArticleID) async {
         try? await store.setOnDevice(id, false)

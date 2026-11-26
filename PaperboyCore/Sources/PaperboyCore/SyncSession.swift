@@ -18,14 +18,22 @@ public struct SyncItem: Sendable, Equatable {
     }
 }
 
+public struct SyncTouch: Sendable, Equatable {
+    public var id: ArticleID
+    public var nonce: UInt32
+    public init(id: ArticleID, nonce: UInt32) { self.id = id; self.nonce = nonce }
+}
+
 public struct SyncPlan: Sendable, Equatable {
     /// Articles the device should have, in upload order. Ones the device already lists are
     /// skipped by the session.
     public var puts: [SyncItem]
     /// Articles the phone has retired. Only ones the device lists are deleted.
+    public var touches: [SyncTouch]
     public var deletes: [ArticleID]
 
-    public init(puts: [SyncItem] = [], deletes: [ArticleID] = []) {
+    public init(puts: [SyncItem] = [], deletes: [ArticleID] = [], touches: [SyncTouch] = []) {
+        self.touches = touches
         self.puts = puts
         self.deletes = deletes
     }
@@ -42,7 +50,10 @@ public protocol SyncDataSource: Sendable {
     func didUpload(_ id: ArticleID) async
     /// The device confirmed the article is gone.
     func didDelete(_ id: ArticleID) async
+    func didTouch(_ touch: SyncTouch) async
 }
+
+public extension SyncDataSource { func didTouch(_ touch: SyncTouch) async {} }
 
 public struct SyncConfig: Sendable {
     public var helloTimeout: Duration = .seconds(5)
@@ -74,6 +85,7 @@ public struct SyncReport: Sendable {
     /// Offered, but the device answered "exists".
     public var alreadyPresent: [ArticleID] = []
     public var deleted: [ArticleID] = []
+    public var bumped: [ArticleID] = []
     public var failures: [SyncFailure] = []
     public var bytesSent: Int = 0
     /// The device ran out of space; remaining uploads were skipped.
@@ -140,7 +152,7 @@ public struct SyncSession: Sendable {
             return nil
         }
         report.device = ack
-        guard ack.version == SyncProtocol.version else { throw SyncError.versionMismatch(device: ack.version) }
+        guard ack.version == SyncProtocol.version || ack.version == 1 else { throw SyncError.versionMismatch(device: ack.version) }
 
         // LIST
         try await send(.list)
@@ -200,6 +212,23 @@ public struct SyncSession: Sendable {
             case .failed(let status):
                 report.failures.append(SyncFailure(id: item.id, reason: status.description))
             }
+        }
+
+        // TOUCH changes priority only. Old firmware keeps these requests queued.
+        for touch in plan.touches where onDevice.contains(touch.id) && !plan.deletes.contains(touch.id) {
+            guard ack.version >= 2 else {
+                report.failures.append(SyncFailure(id: touch.id, reason: "update reader firmware to sync bumps"))
+                continue
+            }
+            try await send(.touch(touch))
+            let status: SyncStatus = try await expect("TOUCH_RESULT", timeout: config.putReadyTimeout) { frame in
+                if case .touchResult(let status) = frame { return status }
+                return nil
+            }
+            if status == .ok {
+                report.bumped.append(touch.id)
+                await source.didTouch(touch)
+            } else { report.failures.append(SyncFailure(id: touch.id, reason: "bump: \(status)")) }
         }
 
         // DELETE

@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var showingSettings = false
     @State private var showingLog = false
     @State private var filter: ArticleFilter = .all
+    @State private var searchText = ""
     @State private var sort: ArticleSort = .newest
 
     var body: some View {
@@ -24,11 +25,14 @@ struct ContentView: View {
                 }
                 if let activity = coordinator.firmwareActivity { Section("Firmware") { Text(activity) } }
                 if let error = coordinator.firmwareError { Section("Firmware") { Text(error).foregroundStyle(.red) } }
-                readerSection
-                sourcesSection
+                if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    readerSection
+                    sourcesSection
+                }
                 articlesSection
             }
             .navigationTitle("Paperboy")
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Title, author, or source")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button { showingSettings = true } label: { Label("Settings", systemImage: "gearshape") }
@@ -146,11 +150,17 @@ struct ContentView: View {
     }
 
     private var shownArticles: [StoredArticle] {
-        let filtered: [StoredArticle]
+        var filtered: [StoredArticle]
         switch filter {
         case .all: filtered = coordinator.articles
         case .unread: filtered = coordinator.articles.filter { !$0.read }
         case .reader: filtered = coordinator.articles.filter { $0.load != .off || $0.onDevice }
+        }
+        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return filtered.enumerated().compactMap { index, article -> (StoredArticle, Int, Int)? in
+                guard let score = MetadataSearch.score(searchText, title: article.title, author: article.author, source: article.source) else { return nil }
+                return (article, score, index)
+            }.sorted { $0.1 == $1.1 ? $0.2 < $1.2 : $0.1 > $1.1 }.map { $0.0 }
         }
         // The store hands them over newest first.
         switch sort {
@@ -162,15 +172,20 @@ struct ContentView: View {
     }
 
     private var articlesSection: some View {
-        Section {
+        let visible = shownArticles
+        return Section {
             Picker("Show", selection: $filter) {
                 ForEach(ArticleFilter.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
-            if shownArticles.isEmpty {
-                Text(coordinator.articles.isEmpty ? "Nothing fetched yet." : "Nothing here.").foregroundStyle(.secondary)
+            if visible.isEmpty {
+                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                } else {
+                    Text(coordinator.articles.isEmpty ? "Nothing fetched yet." : "Nothing here.").foregroundStyle(.secondary)
+                }
             }
-            ForEach(shownArticles) { article in
+            ForEach(visible) { article in
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(article.title)
@@ -190,13 +205,24 @@ struct ContentView: View {
                         }
                     }
                     Spacer(minLength: 0)
-                    loadButton(article)
+                    VStack(spacing: 12) {
+                        loadButton(article)
+                        Button { coordinator.bump(article.id) } label: {
+                            VStack(spacing: 2) {
+                                Image(systemName: "arrow.up.to.line.circle").font(.title2)
+                                Text(article.pendingBump == nil ? "Bump" : "Bump queued").font(.caption2)
+                            }.frame(width: 64)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!article.wantedOnDevice || coordinator.firmwareUpdating)
+                        .accessibilityLabel("Bump \(article.title) to the top of Touched on the reader")
+                    }
                 }
                 .padding(.vertical, 2)
             }
         } header: {
             HStack {
-                Text("Articles (\(shownArticles.count))")
+                Text("Articles (\(visible.count))")
                 Spacer()
                 Menu {
                     Picker("Sort", selection: $sort) {
@@ -209,7 +235,7 @@ struct ContentView: View {
                 }
             }
         } footer: {
-            Text("Tap the button to put an article on the reader, again to lock it there, again to take it off. A loaded article leaves the reader once you have read it; a locked one stays.")
+            Text("Bump moves a loaded article to the top of Touched on the reader at the next sync. Search matches title, author, and source. Tap Load to put an article on the reader, again to lock it there, again to take it off. A loaded article leaves the reader once you have read it; a locked one stays.")
         }
     }
 
