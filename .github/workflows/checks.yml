@@ -1,0 +1,35 @@
+name: Source checks
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  test:
+    # Vision's accurate OCR backend fails on the hosted macOS 27 image.
+    # Keep the full scanned-PDF assertions on the supported macOS 26 runtime.
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Report test runtime
+        run: |
+          sw_vers
+          xcodebuild -version
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Test reader extraction
+        run: npm ci --ignore-scripts && npm test
+      - name: Test shared package including scanned PDF OCR
+        run: swift test --package-path PaperboyCore
+      - name: Build Mac sync tool
+        run: swift build --package-path paperboy-cli
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Verify PDF sharing and document registration
+        run: |
+          (cd Paperboy && xcodegen generate)
+          swift tests/share-activation.swift
+      - name: Type-check Apple status validator
+        run: swiftc -typecheck -swift-version 6 scripts/check-testflight.swift

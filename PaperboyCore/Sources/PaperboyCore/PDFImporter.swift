@@ -105,33 +105,7 @@ public enum PDFImporter {
         request.usesLanguageCorrection = false
         request.automaticallyDetectsLanguage = true
         request.preferBackgroundProcessing = true
-        #if os(macOS)
-        func performOnCPU() throws {
-            // Device discovery also initializes the recognition backend.
-            for (stage, devices) in try request.supportedComputeStageDevices {
-                if let cpu = devices.first(where: { device in
-                    if case .cpu = device { return true }
-                    return false
-                }) {
-                    request.setComputeDevice(cpu, for: stage)
-                }
-            }
-            try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-        }
-        do {
-            try performOnCPU()
-        } catch {
-            // macOS 27 can fail inside its accurate TextRecognition backend.
-            // Retry locally with Vision's fast engine; other errors still propagate.
-            guard (error as NSError).domain == "TextRecognition.CRImageReaderError" else { throw error }
-            request.recognitionLevel = .fast
-            request.usesLanguageCorrection = true
-            request.automaticallyDetectsLanguage = false
-            try performOnCPU()
-        }
-        #else
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-        #endif
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
     }
 }

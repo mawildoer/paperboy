@@ -13,7 +13,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
   publish:
+    needs: checks
     if: github.repository == 'mawildoer/paperboy' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: xcode-27
     env:
@@ -23,21 +26,6 @@ jobs:
       - uses: actions/checkout@v6
       - name: Verify Xcode and iOS SDK
         run: sh scripts/check-xcode.sh
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-      - name: Test extraction
-        run: npm ci --ignore-scripts && npm test
-      - name: Test shared package
-        run: swift test --package-path PaperboyCore
-      - name: Install project generator
-        run: brew install xcodegen
-      - name: Verify PDF sharing
-        run: |
-          (cd Paperboy && xcodegen generate)
-          swift tests/share-activation.swift
-          swiftc -typecheck -swift-version 6 scripts/check-testflight.swift
       - name: Prepare signing keychain and build number
         shell: bash
         run: |
