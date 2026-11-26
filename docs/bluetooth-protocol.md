@@ -46,4 +46,68 @@ CRC-32 is the zlib polynomial over the whole file. An interrupted transfer may l
 file and attempt to remove any newly renamed EPUB if indexing fails; SD faults can prevent cleanup.
 
 A sync session: HELLO → LIST → for each article the device lacks: PUT_BEGIN / PUT_DATA… / PUT_END
-→ DELETE for articles the phone has retired → BYE. After BYE the device turns the radio off on Home; on Articles it keeps an existing connection for further sessions.
+→ DELETE for articles the phone has retired → BYE. After BYE the Library (the Paperboy Home screen)
+keeps an existing connection for further sessions. After a quiet interval, the Library briefly stops
+the radio to reconcile its index, then resumes sync. Opening a book, another screen, or Wi-Fi also
+stops the radio to release its memory.
+
+
+## Bluetooth firmware updates
+
+The existing bonded, encrypted link carries an optional firmware-update extension;
+article protocol version 1 remains unchanged. The app downloads the X3 binary and
+SHA256SUMS from this fork's HTTPS GitHub release and checks the SHA-256 digest.
+Release assets are trusted through the owner's GitHub account and HTTPS, not an
+independent firmware signing key.
+
+| Phone frame | Payload | Device reply |
+|---|---|---|
+| 0x40 FIRMWARE_BEGIN | size u32, zlib crc32 u32 | 0xC0, status u8 |
+| 0x41 FIRMWARE_DATA | raw bytes | 0xC1, bytes consumed u32 |
+| 0x42 FIRMWARE_END | none | 0xC2, validation status u8 |
+| 0x43 FIRMWARE_COMMIT | none | 0xC3, acceptance status u8 |
+| 0x44 FIRMWARE_ABORT | none | no reply |
+
+The 8192-byte window and 4096-byte progress interval match article transfers.
+Maximum firmware size is 0x640000 bytes, matching the current app slots. Additional
+statuses: 7 means USB power or at least 30% battery is required; 8 means the existing
+firmware validator rejected the image. Firmware commands require an authenticated,
+bonded connection permitted by the existing pairing policy.
+
+One transfer reuses the article receiver/file handle and stages on SD at
+`/.crosspoint/paperboy-firmware.bin`. No whole-image MCU allocation is introduced.
+CRC, full ESP image integrity, chip, and board checks run before commit. A commit
+acknowledgment means accepted, not installed. After a 400 ms notification grace
+period BLE is stopped, then the existing flasher revalidates the image, writes the
+inactive slot, switches boot selection only after success, and reboots. The phone
+must reconnect and read the expected, changed firmware version before reporting
+success. The running slot, article files, and progress caches are not overwritten.
+This mechanism does not provide automatic rollback of an image that later crashes.
+
+Before commit is accepted, abort, disconnect, leaving the eligible screen, or a
+30-second stalled transfer abandons staging. After accepted commit, abort frames
+are ignored and a disconnect does not cancel installation. Leaving the eligible
+screen can still stop the operation before flashing; version verification detects
+that the requested update did not complete. The SD file may survive power loss but is never auto-installed;
+the next firmware begin replaces it. Rejected/interrupted transfers do not change
+boot selection. The first firmware with this extension requires USB installation.
+
+## Library timestamps
+
+Article index rows add an optional sixth TSV field: arrival Unix seconds.
+Existing `id, publicationTime, source, title, author` rows remain readable with an
+unknown arrival time. Arrival uses HELLO's phone time plus elapsed monotonic time
+at the successful article transfer; it does not set the system clock. Older rows
+and books fall back to FAT modification time and then retained discovery order. Packed FAT wall time is normalized to Unix seconds using the configured timezone for comparison; raw FAT values still serve cache freshness checks.
+Library toggles through Added, Published, Title, and Author. Reading a file no
+longer pins it above timestamp order. Undated books sort last under Published
+(newest first), retaining title/author navigation and reading progress.
+
+Timestamp discovery reads the article TSV twice into a rebuild-only, fallible
+16-byte-per-entry snapshot (maximum 64 KiB for 4096 article entries). It is sorted
+by article ID for logarithmic lookups without SD I/O during the library walk and
+released when the rebuild returns. Read/allocation failure preserves the existing
+index. This adds temporary rebuild memory, not a resident library metadata cache.
+Automatic Library refresh and automatic sleep stay deferred while firmware is
+receiving, validated, or committed. A stalled transfer clears this hold after
+30 seconds; successful OTA reboots into Home/Library so the phone can reconnect.

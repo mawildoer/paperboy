@@ -75,3 +75,26 @@ Paperboy 0.1 (101.1), built from `92392f7`, completed the [Publish TestFlight ru
 The independent [Apple status validation](https://github.com/mawildoer/paperboy/actions/runs/45760699236), introduced in `521eaf3`, confirmed processing `VALID`, internal state `READY_FOR_BETA_TESTING`, and external state `READY_FOR_BETA_SUBMISSION`. The updated normal [CI run](https://github.com/mawildoer/paperboy/actions/runs/45760676858) also passed. [Manage the build in App Store Connect](https://appstoreconnect.apple.com/apps/6838137167/testflight). Internal tester/group enrollment and physical-device testing were not performed by these checks.
 
 Non-blocking warnings for build 101.1: a spare, unassigned legacy icon exists in the icon asset directory; App Intents metadata is skipped because the app does not use that framework; the runner's iOS 26.5 SDK was accepted but triggered Apple's April 2027 SDK warning. CI was subsequently moved to Xcode 27.2 with pre-build and archive SDK checks.
+
+
+## 2026-11-25 developer-device update
+
+Medium now supports Safari sharing and the signed-in Following page, with local
+extraction and explicit paywall-preview rejection. No RSS subscription mode was
+added. A real Medium account sign-in and member-story fetch remain to be checked.
+
+The Debug app was signed using the existing desktop-session Xcode helper and
+installed directly over USB on the attached iPhone. It sent the final 5,530,768-byte
+X3 firmware over Bluetooth, then logged a successful changed-version check for
+`0.2.0-paperboy` after reboot and a normal article sync. The reader had received
+one USB bootstrap app-slot installation first. The app was relaunched normally
+and remains installed; this validation did not depend on TestFlight.
+
+145 shared Swift tests and seven DOM extraction tests passed, as did the PDF/share
+registration check and the signed Debug app/extension build. The normal CI run
+for Medium/updater commit `628db57` passed on Xcode 27.2. The split TestFlight job
+initially lacked XcodeGen; `698212b` restores its installation and isolates article
+sync from firmware replies. The corrected CI and TestFlight jobs were started in
+the background; do not infer successful upload/Apple processing until their
+statuses are checked. The user explicitly preferred the USB developer build and
+requested not to wait for the full TestFlight cycle.
