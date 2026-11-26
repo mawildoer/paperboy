@@ -1,8 +1,8 @@
 # App Store preparation
 
-Status: preparation only. No build has been submitted to App Store Connect or App Review.
+Status: Paperboy 0.1 build 101.1 was uploaded and validated for internal TestFlight testing on 2026-11-25. It has not been submitted to App Review or released on the public App Store.
 
-Local verification on 2026-11-20: 126 shared tests passed; the Mac sync tool built; the unsigned Release iOS app and share extension built; both privacy manifests were present in the built bundles. Distribution signing, archive export, and Apple validation have not been performed.
+Initial local verification on 2026-11-20: 126 shared tests passed; the Mac sync tool built; the unsigned Release iOS app and share extension built; both privacy manifests were present in the built bundles. Distribution validation was completed later, as recorded below.
 
 ## Prepared
 
@@ -38,14 +38,14 @@ References: [Apple's cloud-signing automation](https://developer.apple.com/video
 
 ## Remaining gates
 
-1. **Distribution account.** The local Xcode configuration was a free Personal Team on 2026-11-20. App Store and TestFlight require Apple Developer Program membership; enrollment and agreements need the account holder. Confirm the distribution team and retain or migrate bundle identifiers deliberately.
-2. **App identity and capabilities.** Register `app.paperboy.readerc67aad`, its `.share` extension, and `group.app.paperboy.readerc67aad` with the distribution team. If changing them, update both code constants, the project spec, and entitlement files together. Create the App Store Connect app record. Verify name availability before branding is finalized.
+1. **Distribution account.** The paid team and Admin API key authenticated successfully in CI on 2026-11-25. Xcode archived, cloud-signed, and uploaded build 101.1. Account agreements and signing access remain the account holder's responsibility.
+2. **App identity and capabilities.** The app record is `6838137167` for `app.paperboy.readerc67aad`. The `.share` extension and shared app group `group.app.paperboy.readerc67aad` were included in the successful signed archive. If changing identities, update code constants, the project spec, entitlement files, and Apple registrations together.
 3. **Content access permissions.** Substack and NYT use undocumented/private endpoints and signed-in web views. Verify that public distribution is permitted under each service's terms and obtain authorization if necessary. A paid reader subscription alone does not establish distribution permission. Keep NYT out of launch claims until login and fetching are verified. Consider a first release centered on user-initiated sharing of permitted pages if direct integrations cannot be cleared.
 4. **Privacy.** Review [the draft policy](privacy-draft.md), publish a stable privacy-policy URL, link it in the app, and fill App Store Connect privacy answers from a final audit. Recheck manifests against the archive privacy report. Audit logs, cookies, the share extension, publisher pages, retention, device transfer, and removal of local data. Establish user-facing controls/documentation for clearing cached articles and logs; current sign-out should not be assumed to remove all downloaded content.
 5. **Product validation.** Test fresh installs, denied permissions, expired sign-ins, custom-domain subscriptions, missing content access, Bluetooth reconnect/restoration, reader sleep, background fetching, large transfers, interrupted sync, and the share extension. Confirm unfinished articles resume and are not deleted during synchronization. Do not promise continuous or scheduled background availability.
 6. **Reviewer access.** Prepare sample content you have rights to share, clear setup steps, and an explanation of the hardware dependency. Arrange a reviewable path or demo approach acceptable to App Review; a physical X3 and private subscriptions cannot be assumed available to reviewers.
 7. **Listing.** Supply accurate screenshots, description, support URL/contact, privacy URL, age rating, content-rights answers, encryption declarations, territories/pricing, and reviewer notes. Do not assume the current encryption flag is a completed export-compliance assessment.
-8. **Release.** Archive and validate with the paid team, upload through Xcode Organizer, test the processed build through TestFlight, then complete App Review. No distribution key, password, certificate, or provisioning profile belongs in Git.
+8. **Release.** CI archive/upload and Apple processing validation passed for build 101.1. Configure the internal tester group and test on a physical phone, then complete the public App Store preparation and App Review separately. No distribution key, password, certificate, or provisioning profile belongs in Git.
 
 ## Apple references
 
@@ -63,3 +63,11 @@ Build 2 adds monochrome EPUB images and local Readability extraction. 133 Swift 
 ## PDF sharing update — 2026-11-21
 
 Build 3 registers explicit PDF share and Open In support. Conversion is local: native PDF text, Apple Vision OCR for scans, and monochrome page images. The signed app and extension archive build passed, 137 Swift tests and four webpage tests passed, and a generated-plist test matched PDFs while preserving URL/text/webpage sharing. Build 3 was installed and launched on the connected iPhone. Safari's physical share-sheet UI and e-reader PDF-derived article display still need user verification.
+
+## First TestFlight upload — 2026-11-25
+
+Paperboy 0.1 (101.1), built from `92392f7`, completed the [Publish TestFlight run](https://github.com/mawildoer/paperboy/actions/runs/45760290187). All 137 Swift tests, four extraction tests, and generated-plist share checks passed. Xcode created signing assets through the API, archived the app and extension, cloud-signed the distribution, and reported a successful upload.
+
+The independent [Apple status validation](https://github.com/mawildoer/paperboy/actions/runs/45760699236), introduced in `521eaf3`, confirmed processing `VALID`, internal state `READY_FOR_BETA_TESTING`, and external state `READY_FOR_BETA_SUBMISSION`. The updated normal [CI run](https://github.com/mawildoer/paperboy/actions/runs/45760676858) also passed. [Manage the build in App Store Connect](https://appstoreconnect.apple.com/apps/6838137167/testflight). Internal tester/group enrollment and physical-device testing were not performed by these checks.
+
+Non-blocking upload warnings: a spare, unassigned legacy icon exists in the icon asset directory; App Intents metadata is skipped because the app does not use that framework; the runner's iOS 26.5 SDK is currently accepted, but Apple's upload warning requires iOS 27 SDK or newer starting April 2027. Refresh the CI Xcode selection before that deadline.
