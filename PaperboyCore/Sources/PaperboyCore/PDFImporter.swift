@@ -116,7 +116,20 @@ public enum PDFImporter {
             }
         }
         #endif
+        #if os(macOS)
+        do {
+            try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        } catch {
+            // macOS 27 can fail inside its accurate TextRecognition backend.
+            // Retry locally with Vision's fast engine; other errors still propagate.
+            guard (error as NSError).domain == "TextRecognition.CRImageReaderError" else { throw error }
+            request.recognitionLevel = .fast
+            request.automaticallyDetectsLanguage = false
+            try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        }
+        #else
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        #endif
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
     }
 }
