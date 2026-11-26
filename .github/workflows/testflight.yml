@@ -26,6 +26,8 @@ jobs:
       - uses: actions/checkout@v6
       - name: Verify Xcode and iOS SDK
         run: sh scripts/check-xcode.sh
+      - name: Install project generator
+        run: brew install xcodegen
       - name: Prepare signing keychain and build number
         shell: bash
         run: |

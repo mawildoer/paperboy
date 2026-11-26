@@ -66,7 +66,7 @@ final class SyncCoordinator: ObservableObject {
             firmwareActivity = "Waiting to validate Bluetooth firmware update…"
         }
         #endif
-        bluetooth.onReady = { [weak self] in self?.readerConnected() }
+        bluetooth.onReady = { [weak self] in self?.readerConnected(reconnected: true) }
     }
 
     /// One instance for the whole process. It is created at launch, not when the first view
@@ -250,7 +250,7 @@ final class SyncCoordinator: ObservableObject {
             loadChangeSync?.cancel()
             loadChangeSync = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled, let self, self.syncTask == nil,
+                guard !Task.isCancelled, let self, self.syncTask == nil, !self.firmwareUpdating,
                       case .connected = self.bluetooth.state else { return }
                 self.syncTask = Task { [weak self] in
                     await self?.runSession()
@@ -355,9 +355,9 @@ final class SyncCoordinator: ObservableObject {
     // MARK: Syncing
 
     /// The reader just connected: a short fetch of anything new, then the session.
-    private func readerConnected() {
+    private func readerConnected(reconnected: Bool = false) {
         if pendingFirmwareVersion != nil {
-            verifyFirmwareAfterReboot()
+            if reconnected { verifyFirmwareAfterReboot() }
             return
         }
         #if DEBUG
@@ -510,7 +510,12 @@ final class SyncCoordinator: ObservableObject {
         guard firmwareTask == nil, let expected = pendingFirmwareVersion else { return }
         firmwareTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.firmwareTask = nil; self.firmwareUpdating = false }
+            var verified = false
+            defer {
+                self.firmwareTask = nil
+                self.firmwareUpdating = false
+                if verified { self.readerConnected() }
+            }
             do {
                 let transport = self.bluetooth.transport
                 try await transport.send(Frame.hello(version: SyncProtocol.version, unixTime: UInt32(clamping: Int(Date().timeIntervalSince1970))).encode(), withResponse: true)
@@ -525,6 +530,7 @@ final class SyncCoordinator: ObservableObject {
                 self.pendingFirmwareVersion = nil
                 self.firmwareActivity = "Firmware updated to \(ack.firmwareVersion)."
                 AppLog.post("Firmware update verified after reboot: \(ack.firmwareVersion)")
+                verified = true
                 #if DEBUG
                 UserDefaults.standard.set(true, forKey: "paperboy.firmwareValidation.completed")
                 #endif
