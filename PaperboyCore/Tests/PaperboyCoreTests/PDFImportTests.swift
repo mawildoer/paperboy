@@ -57,7 +57,14 @@ import Testing
     @Test func scannedPDFUsesLocalOCRWithoutDroppingThePage() throws {
         let data = try Self.document(scanned: true)
         #expect(PDFDocument(data: data)?.page(at: 0)?.string?.isEmpty != false)
-        let article = try PDFImporter.article(data: data, url: "paperboy-pdf://scan")
+        let article: Article
+        do {
+            article = try PDFImporter.article(data: data, url: "paperboy-pdf://scan")
+        } catch {
+            let details = error as NSError
+            Issue.record("Local OCR failed: \(details.domain) \(details.code): \(details.localizedDescription); \(details.userInfo)")
+            return
+        }
         #expect(article.images.count == 1)
         #expect(article.bodyXHTML.localizedCaseInsensitiveContains("Quarterly"))
     }
