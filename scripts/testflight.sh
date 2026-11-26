@@ -50,3 +50,4 @@ PY
 xcodebuild -exportArchive -archivePath "$OUT/Paperboy.xcarchive" \
   -exportPath "$OUT/export" -exportOptionsPlist "$OUT/ExportOptions.plist" "${AUTH[@]}"
 printf 'Uploaded Paperboy build %s. Apple must finish processing before it is available in TestFlight.\n' "$BUILD_NUMBER"
+swift "$ROOT/scripts/check-testflight.swift" "$KEY_DIR/AuthKey.p8" "$ASC_KEY_ID" "$ASC_ISSUER_ID" "$BUILD_NUMBER"

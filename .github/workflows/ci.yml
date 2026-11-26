@@ -27,6 +27,8 @@ jobs:
         run: xcodegen generate
       - name: Verify PDF sharing and document registration
         run: swift tests/share-activation.swift
+      - name: Type-check Apple status validator
+        run: swiftc -typecheck -swift-version 6 scripts/check-testflight.swift
       - name: Build iOS app and share extension
         run: >-
           xcodebuild -project Paperboy/Paperboy.xcodeproj -scheme Paperboy

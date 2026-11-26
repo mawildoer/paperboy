@@ -14,7 +14,7 @@ Local verification on 2026-11-20: 126 shared tests passed; the Mac sync tool bui
 
 ## TestFlight from GitHub Actions
 
-The **Publish TestFlight** workflow (`.github/workflows/testflight.yml`) runs on app tags beginning with `v` or manually on `main`. It runs the extraction, Swift, and share-registration checks, archives the app and extension with Xcode automatic signing, and uploads to App Store Connect. It does not submit to App Review or publish to the public App Store. Apple processing and TestFlight tester/group configuration follow the upload.
+The **Publish TestFlight** workflow (`.github/workflows/testflight.yml`) runs on app tags beginning with `v` or manually on `main`. It runs the extraction, Swift, and share-registration checks, archives the app and extension with Xcode automatic signing, and uploads to App Store Connect. It then checks Apple's API for up to 20 minutes, requiring processing state `VALID` and an internal TestFlight state of `READY_FOR_BETA_TESTING` or `IN_BETA_TESTING`. It does not submit to App Review or publish to the public App Store. TestFlight tester/group configuration remains separate.
 
 In this repository's **Settings → Secrets and variables → Actions**, create these repository secrets:
 
@@ -31,6 +31,8 @@ GitHub cannot reveal stored secret values. The workflow writes the key to a priv
 Each run receives a build number of `100 + workflow run number`, followed by the run attempt (for example, `101.1`). A retry has a new build number. The app and extension receive the same value. After adding the secrets, open **Actions → Publish TestFlight → Run workflow**, choose `main`, and run it. Successful upload does not mean Apple has finished processing the build.
 
 For an equivalent local upload, set the three `ASC_*` variables and a new `BUILD_NUMBER`, select full Xcode using `DEVELOPER_DIR`, then run `bash scripts/testflight.sh`. Optional `TEAM_ID` and `TESTFLIGHT_OUTPUT` override the team and output directory. The script refuses to replace an existing archive and stops if archiving or uploading fails.
+
+To recheck a build that was already uploaded, manually run **Validate TestFlight** on `main` and enter its build number. This workflow only reads Apple status; it does not create another build or send invitations. It uses the same three secrets, signs short-lived API tokens locally on the runner, prints processing/beta states and the app link, and removes its private-key file on exit. If Apple processing takes longer than 20 minutes, rerun this status check rather than uploading the same build again.
 
 References: [Apple's cloud-signing automation](https://developer.apple.com/videos/play/wwdc2021/10204/), [App Store Connect API setup](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api/), and [upload processing](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/).
 

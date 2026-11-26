@@ -1,0 +1,34 @@
+name: Validate TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Uploaded build number to validate (no new upload)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.repository == 'mawildoer/paperboy' && github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check Apple processing and TestFlight state
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key_dir="$(mktemp -d "$RUNNER_TEMP/paperboy-status.XXXXXX")"
+          trap 'rm -rf "$key_dir"' EXIT
+          printf '%s\n' "$ASC_PRIVATE_KEY" > "$key_dir/AuthKey.p8"
+          unset ASC_PRIVATE_KEY
+          swift scripts/check-testflight.swift "$key_dir/AuthKey.p8" "$ASC_KEY_ID" "$ASC_ISSUER_ID" "$BUILD_NUMBER"

@@ -33,6 +33,7 @@ jobs:
         run: |
           (cd Paperboy && xcodegen generate)
           swift tests/share-activation.swift
+          swiftc -typecheck -swift-version 6 scripts/check-testflight.swift
       - name: Prepare signing keychain and build number
         shell: bash
         run: |
