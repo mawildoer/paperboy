@@ -8,6 +8,7 @@ set -euo pipefail
 : "${BUILD_NUMBER:?Set BUILD_NUMBER to a new CFBundleVersion}"
 
 ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
+sh "$ROOT/scripts/check-xcode.sh"
 TEAM_ID="${TEAM_ID:-PTVJRD6TRB}"
 OUT="${TESTFLIGHT_OUTPUT:-$ROOT/.build/testflight/$BUILD_NUMBER}"
 mkdir -p "$OUT"
@@ -32,6 +33,21 @@ xcodebuild -project Paperboy.xcodeproj -scheme Paperboy -configuration Release \
   -destination 'generic/platform=iOS' -archivePath "$OUT/Paperboy.xcarchive" \
   DEVELOPMENT_TEAM="$TEAM_ID" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   "${AUTH[@]}" archive
+
+python3 - "$OUT/Paperboy.xcarchive/Products/Applications/Paperboy.app" <<'PY'
+from pathlib import Path
+import plistlib
+import re
+import sys
+app = Path(sys.argv[1])
+for bundle in [app, *sorted((app / "PlugIns").glob("*.appex"))]:
+    with (bundle / "Info.plist").open("rb") as info:
+        sdk = plistlib.load(info).get("DTSDKName", "")
+    version = re.fullmatch(r"iphoneos(\d+)(?:\.\d+)*", sdk)
+    if not version or int(version[1]) < 27:
+        raise SystemExit(f"Refusing upload: {bundle.name} was built with unsupported SDK {sdk!r}")
+    print(f"Validated archived SDK: {bundle.name} {sdk}")
+PY
 
 python3 - "$OUT/ExportOptions.plist" "$TEAM_ID" <<'PY'
 import plistlib

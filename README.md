@@ -15,7 +15,7 @@ Requires the matching [Paperboy CrossPoint firmware](https://github.com/mawildoe
 
 ## Build
 
-Use full Xcode with the iOS SDK, Swift 6, and XcodeGen (`brew install xcodegen`). The current source was built with Xcode 27.2; CI uses the runner's installed Xcode. Earlier Xcode versions are not guaranteed.
+Use full Xcode with the iOS SDK, Swift 6, and XcodeGen (`brew install xcodegen`). CI uses the `xcode-27` runner and explicitly selects Xcode 27.2. TestFlight uploads require iOS SDK 27 or newer, checked both before building and in the archived app/extension metadata. Earlier Xcode versions are not guaranteed.
 
 ```sh
 ./scripts/check.sh
