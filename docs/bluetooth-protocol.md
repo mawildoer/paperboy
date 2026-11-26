@@ -1,4 +1,4 @@
-# Paperboy Bluetooth protocol (version 1)
+# Paperboy Bluetooth protocol (versions 1 and 2)
 
 Service `8E400001-7B2A-4B1F-9C5D-5A1EF0C0DE01`
 
@@ -15,7 +15,7 @@ Phone → device:
 
 | Type | Name | Payload |
 |---|---|---|
-| 0x01 | HELLO | protocol version u8 (=1), unix time u32 |
+| 0x01 | HELLO | protocol version u8 (1 or 2), unix time u32 |
 | 0x02 | LIST | none |
 | 0x10 | PUT_BEGIN | id[8], size u32, crc32 u32, time u32, source len u8 + bytes, title len u8 + bytes, author len u8 + bytes |
 | 0x11 | PUT_DATA | raw bytes (sent without response) |
@@ -99,9 +99,9 @@ Existing `id, publicationTime, source, title, author` rows remain readable with 
 unknown arrival time. Arrival uses HELLO's phone time plus elapsed monotonic time
 at the successful article transfer; it does not set the system clock. Older rows
 and books fall back to FAT modification time and then retained discovery order. Packed FAT wall time is normalized to Unix seconds using the configured timezone for comparison; raw FAT values still serve cache freshness checks.
-Library toggles through Added, Published, Title, and Author. Reading a file no
+Library toggles through Touched, Added, and Published, newest first. Reading a file no
 longer pins it above timestamp order. Undated books sort last under Published
-(newest first), retaining title/author navigation and reading progress.
+(newest first). Reading progress is preserved in every view.
 
 Timestamp discovery reads the article TSV twice into a rebuild-only, fallible
 16-byte-per-entry snapshot (maximum 64 KiB for 4096 article entries). It is sorted
@@ -111,3 +111,31 @@ index. This adds temporary rebuild memory, not a resident library metadata cache
 Automatic Library refresh and automatic sleep stay deferred while firmware is
 receiving, validated, or committed. A stalled transfer clears this hold after
 30 seconds; successful OTA reboots into Home/Library so the phone can reconnect.
+
+
+## Protocol 2: metadata-only bumps
+
+A new phone sends HELLO version 2. New firmware returns version 2 for such a
+phone, and version 1 for old phones. Version 2 phones accept version 1 for basic
+article sync and firmware updates; they keep bump requests queued until firmware
+supports them. Existing article frames are unchanged.
+
+| Type | Name | Payload |
+|---|---|---|
+| 0x21 | TOUCH | article id[8], nonzero phone bump nonce u32 |
+| 0xA1 | TOUCH_RESULT | status u8 |
+
+After uploads and before deletes, a phone sends pending touches only for articles
+present on the reader and still wanted there. Successful acknowledgment clears
+only the matching queued nonce; a newer tap remains queued. Nonces are ordered
+across phone taps, including taps within one second. Repeated or older nonces do
+not promote the article again, even after a later local open. The phone sends no
+EPUB bytes, resets no reading position, and does not change load/read state or
+Added/Published values. Load an article before bumping it. New firmware increments
+its store-generation signal so an idle Library refreshes the ordering.
+
+Firmware keeps a clock-independent sequence per path, persisted with a reserved
+counter. Opening a successfully rendered book or article also touches it. The
+three reader views are Touched, Added, Published, newest first. The sleep screen
+reuses the Paperboy artwork as a 1,800-byte monochrome bitmap. Generate it from
+`src/images/PaperboyIcon.png` using `scripts/generate_paperboy_logo.py`.

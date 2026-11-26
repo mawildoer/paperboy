@@ -94,10 +94,11 @@ and remains installed; this validation did not depend on TestFlight.
 registration check and the signed Debug app/extension build. The normal CI run
 for Medium/updater commit `628db57` passed on Xcode 27.2. The split TestFlight job
 initially lacked XcodeGen; `698212b` restores its installation and isolates article
-sync from firmware replies. The corrected CI and TestFlight jobs were started in
-the background; do not infer successful upload/Apple processing until their
-statuses are checked. The user explicitly preferred the USB developer build and
-requested not to wait for the full TestFlight cycle.
+sync from firmware replies. The corrected TestFlight run
+[45767837037](https://github.com/mawildoer/paperboy/actions/runs/45767837037)
+subsequently completed successfully. The user explicitly preferred the USB
+developer build for that update and requested not to wait for the full
+TestFlight cycle.
 
 
 ## 2026-11-26 Touched library, Bump, and search
@@ -119,3 +120,21 @@ build passed. Tests cover metadata search, persistent/coalesced requests, stale
 acknowledgments, upload-before-bump ordering, legacy firmware, and exact frame
 bytes. User requested TestFlight distribution followed by Bluetooth firmware
 installation this time; no USB developer deployment is part of this update.
+
+App commit `6b8780e` passed [CI](https://github.com/mawildoer/paperboy/actions/runs/45909891845)
+and [TestFlight publication](https://github.com/mawildoer/paperboy/actions/runs/45909891317).
+Build **107.1** was archived with Xcode/iOS SDK 27.2 for the app and extension,
+uploaded, and confirmed `VALID` and ready for configured internal testers by
+Apple's API. Installation and the subsequent Bluetooth firmware update remain
+human device checks; CI success does not establish either result.
+
+Companion firmware [paperboy-v0.3.0](https://github.com/mawildoer/crosspoint-reader/releases/tag/paperboy-v0.3.0),
+source `77d25af`, passed branch and [release CI](https://github.com/mawildoer/crosspoint-reader/actions/runs/45911582421).
+The updater's latest-release endpoint selects it. All downloaded asset checksums
+matched; esptool validated the image's internal checksum and hash. The ESP32-C3
+image fits the OTA slot, contains runtime version `0.3.0-paperboy`, and has SHA-256
+`2891b36182953390c7ece07dac71da378874a1fb179ed233476419fe89c9d014`.
+On the phone, install TestFlight build 107.1, then use **Settings → Update reader
+over Bluetooth** with the reader in Library and USB-powered or above 30% battery.
+After reboot, confirm Paperboy reports `0.3.0-paperboy`, then check Bump order,
+partially read article resume, and the three Library views and sleep artwork.

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Paperboy Bluetooth protocol, version 1. See DESIGN.md, "Bluetooth protocol".
+/// Paperboy Bluetooth protocol, version 2. See docs/bluetooth-protocol.md.
 ///
 /// Each GATT write (phone → device, RX characteristic) or notification (device → phone, TX
 /// characteristic) carries exactly one frame: one type byte followed by the payload.
@@ -78,7 +78,7 @@ public struct PutBegin: Equatable, Sendable {
     public var size: UInt32
     /// CRC-32 (zlib) of the whole file.
     public var crc32: UInt32
-    /// Unix time of the article (publication time; what the device sorts by).
+    /// Publication time in Unix seconds, used by the reader's Published view.
     public var time: UInt32
     public var source: String
     public var title: String
