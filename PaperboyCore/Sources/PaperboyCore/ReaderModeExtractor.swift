@@ -51,6 +51,9 @@ public final class ReaderModeExtractor: NSObject, WKNavigationDelegate {
         _ = try await web.evaluateJavaScript(library + "\n" + wrapper)
         let value = try await web.callAsyncJavaScript(
             "return paperboyReaderHTML(html, url);", arguments: ["html": html, "url": url], in: nil, contentWorld: .page)
+        if let result = value as? [String: Any], result["error"] as? String == "medium-access-required" {
+            throw MediumError.accessRequired
+        }
         guard let result = value as? [String: Any], let body = result["html"] as? String else {
             throw PageExtractorError.noArticleText(words: 0)
         }

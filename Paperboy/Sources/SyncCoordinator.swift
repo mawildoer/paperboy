@@ -27,6 +27,9 @@ final class SyncCoordinator: ObservableObject {
     }
     @Published private(set) var articles: [StoredArticle] = []
     @Published private(set) var device = DeviceStatus()
+    @Published private(set) var firmwareUpdating = false
+    @Published private(set) var firmwareActivity: String?
+    @Published private(set) var firmwareError: String?
     @Published private(set) var activity: String?
     @Published private(set) var lastFetch: Date?
     @Published private(set) var lastFetchNote: String?
@@ -38,9 +41,15 @@ final class SyncCoordinator: ObservableObject {
     let bluetooth = BluetoothTransport()
     private let substack = SubstackSource()
     private let nyt = NYTSource()
+    private let medium = MediumSource()
     private var store: ArticleStore?
     private var fetchTask: Task<FetchSummary, Never>?
     private var syncTask: Task<Void, Never>?
+    private var validationAttempted = false
+    private var firmwareTask: Task<Void, Never>?
+    private var pendingFirmwareVersion: String?
+    private var pendingFirmwarePrevious: String?
+    private var firmwareTimeout: Task<Void, Never>?
     private var loadChangeSync: Task<Void, Never>?
 
     private init() {
@@ -52,6 +61,11 @@ final class SyncCoordinator: ObservableObject {
         } catch {
             startupError = "Could not open the article library: \(error.localizedDescription)"
         }
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--paperboy-firmware-validation") {
+            firmwareActivity = "Waiting to validate Bluetooth firmware update…"
+        }
+        #endif
         bluetooth.onReady = { [weak self] in self?.readerConnected() }
     }
 
@@ -74,7 +88,10 @@ final class SyncCoordinator: ObservableObject {
             await refreshArticles()
             await refreshLoginStatus()
             // "A fetch also runs … on app open."
-            _ = await fetch(reason: "app open", includeNYT: true, limitSeconds: 600)
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--paperboy-firmware-validation") { return }
+            #endif
+            _ = await fetch(reason: "app open", includeWebSources: true, limitSeconds: 600)
         }
     }
 
@@ -191,6 +208,9 @@ final class SyncCoordinator: ObservableObject {
             return article
         }
         guard let url = URL(string: page.url), let host = url.host?.lowercased() else { throw URLError(.badURL) }
+        if MediumDiscovery.isMediumHost(host) {
+            return try await medium.fetchArticle(page.url)
+        }
         if host.hasSuffix("nytimes.com") {
             return try await nyt.fetchArticle(page.url)
         }
@@ -254,7 +274,7 @@ final class SyncCoordinator: ObservableObject {
         if service == .nyt { nyt.resetBotCheck() }
         Task {
             await refreshLoginStatus()
-            _ = await fetch(reason: "signed in", includeNYT: true, limitSeconds: 600)
+            _ = await fetch(reason: "signed in", includeWebSources: true, limitSeconds: 600)
         }
     }
 
@@ -290,13 +310,15 @@ final class SyncCoordinator: ObservableObject {
     /// Fetch new articles from the enabled sources. Runs are not stacked: a second call while
     /// one is running waits for that one.
     @discardableResult
-    func fetch(reason: String, includeNYT: Bool, limitSeconds: Double) async -> FetchSummary {
+    func fetch(reason: String, includeWebSources: Bool, limitSeconds: Double) async -> FetchSummary {
+        if firmwareTask != nil || pendingFirmwareVersion != nil { return FetchSummary() }
         if let running = fetchTask { return await running.value }
         guard let store else { return FetchSummary() }
         let settings = self.settings
         let deadline = Date().addingTimeInterval(limitSeconds)
         let substack = self.substack
         let nyt = self.nyt
+        let medium = self.medium
         AppLog.shared.add("Fetch (\(reason)) started")
         if activity == nil { activity = "Fetching articles…" }
 
@@ -305,7 +327,10 @@ final class SyncCoordinator: ObservableObject {
             if settings.substackEnabled {
                 summary.merge(await substack.fetchNew(settings: settings, store: store, deadline: deadline))
             }
-            if settings.nytEnabled, includeNYT, !Task.isCancelled, Date() < deadline {
+            if settings.mediumEnabled, includeWebSources, !Task.isCancelled, Date() < deadline {
+                summary.merge(await medium.fetchNew(settings: settings, store: store, deadline: deadline))
+            }
+            if settings.nytEnabled, includeWebSources, !Task.isCancelled, Date() < deadline {
                 summary.merge(await nyt.fetchNew(settings: settings, store: store, deadline: deadline))
             }
             return summary
@@ -331,6 +356,19 @@ final class SyncCoordinator: ObservableObject {
 
     /// The reader just connected: a short fetch of anything new, then the session.
     private func readerConnected() {
+        if pendingFirmwareVersion != nil {
+            verifyFirmwareAfterReboot()
+            return
+        }
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--paperboy-firmware-validation"), firmwareTask == nil, !validationAttempted,
+           !UserDefaults.standard.bool(forKey: "paperboy.firmwareValidation.completed") {
+            validationAttempted = true
+            updateFirmware(validation: true)
+            return
+        }
+        #endif
+        guard firmwareTask == nil else { return }
         guard syncTask == nil else { return }
         syncTask = Task { [weak self] in
             await self?.fetchThenSync()
@@ -344,7 +382,7 @@ final class SyncCoordinator: ObservableObject {
             readerConnected()
         } else {
             bluetooth.start()
-            Task { _ = await fetch(reason: "sync now", includeNYT: true, limitSeconds: 600) }
+            Task { _ = await fetch(reason: "sync now", includeWebSources: true, limitSeconds: 600) }
         }
     }
 
@@ -357,7 +395,7 @@ final class SyncCoordinator: ObservableObject {
 
         // UNVERIFIED: how long the reader waits for HELLO after connecting. DESIGN.md gives it
         // 8 s to connect and 90 s to finish a transfer before it sleeps, so the fetch here is
-        // short (Substack only; NYT pages take seconds each) and is cut off at the limit.
+        // short (Substack only; rendered pages take seconds each) and is cut off at the limit.
         await processSharedInbox()
         let limit = max(0, settings.connectFetchSeconds)
         if limit > 0 {
@@ -365,7 +403,7 @@ final class SyncCoordinator: ObservableObject {
                 try? await Task.sleep(for: .seconds(limit))
                 if !Task.isCancelled { self?.cancelFetch() }
             }
-            _ = await fetch(reason: "reader connected", includeNYT: false, limitSeconds: limit)
+            _ = await fetch(reason: "reader connected", includeWebSources: false, limitSeconds: limit)
             watchdog.cancel()
         }
         await runSession()
@@ -402,11 +440,109 @@ final class SyncCoordinator: ObservableObject {
         await refreshArticles()
     }
 
+    // MARK: Firmware updates
+
+    func updateFirmware(validation: Bool = false) {
+        guard firmwareTask == nil, pendingFirmwareVersion == nil else { return }
+        guard case .connected = bluetooth.state else {
+            firmwareError = "Connect to the reader in its Library before updating firmware."
+            return
+        }
+        firmwareError = nil
+        firmwareUpdating = true
+        cancelFetch()
+        loadChangeSync?.cancel()
+        let oldSync = syncTask
+        oldSync?.cancel()
+        firmwareTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.firmwareTask = nil
+                if self.pendingFirmwareVersion == nil { self.firmwareUpdating = false }
+            }
+            #if os(iOS)
+            let priorIdleTimer = UIApplication.shared.isIdleTimerDisabled
+            UIApplication.shared.isIdleTimerDisabled = true
+            defer { UIApplication.shared.isIdleTimerDisabled = priorIdleTimer }
+            #endif
+            await oldSync?.value
+            do {
+                self.firmwareActivity = "Downloading firmware…"
+                let release: FirmwareRelease
+                #if DEBUG
+                if validation {
+                    let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("paperboy-firmware-validation.bin")
+                    let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                    guard size <= FirmwareUpdateSession.maximumBytes else { throw URLError(.dataLengthExceedsMaximum) }
+                    release = FirmwareRelease(version: "0.2.0-paperboy", image: try Data(contentsOf: file))
+                } else { release = try await FirmwareRelease.latest() }
+                #else
+                release = try await FirmwareRelease.latest()
+                #endif
+                let transfer = FirmwareUpdateSession(transport: self.bluetooth.transport) { value in
+                    Task { @MainActor [weak self] in if self?.pendingFirmwareVersion == nil { self?.firmwareActivity = "Sending firmware: \(Int(value * 100))%" } }
+                }
+                guard let previous = try await transfer.install(release.image, targetVersion: release.version) else {
+                    self.firmwareActivity = "Reader firmware is up to date."
+                    return
+                }
+                self.pendingFirmwareVersion = release.version
+                self.pendingFirmwarePrevious = previous
+                self.firmwareActivity = "Installing firmware; waiting for the reader to restart…"
+                AppLog.post("Firmware install accepted: \(previous) -> \(release.version); waiting for reboot")
+                self.firmwareTimeout = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(120)) } catch { return }
+                    guard let self, self.pendingFirmwareVersion != nil else { return }
+                    self.pendingFirmwareVersion = nil
+                    self.firmwareUpdating = false
+                    self.firmwareActivity = nil
+                    self.firmwareError = "The reader has not reconnected. Its update is not yet confirmed; leave it powered on in Library."
+                }
+            } catch {
+                self.firmwareActivity = nil
+                self.firmwareError = String(describing: error)
+                AppLog.post("Firmware update failed: \(error)")
+            }
+        }
+    }
+
+    private func verifyFirmwareAfterReboot() {
+        guard firmwareTask == nil, let expected = pendingFirmwareVersion else { return }
+        firmwareTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.firmwareTask = nil; self.firmwareUpdating = false }
+            do {
+                let transport = self.bluetooth.transport
+                try await transport.send(Frame.hello(version: SyncProtocol.version, unixTime: UInt32(clamping: Int(Date().timeIntervalSince1970))).encode(), withResponse: true)
+                let reply = try Frame.decode(try await transport.receive(timeout: .seconds(15)))
+                guard case .helloAck(let ack) = reply else { throw SyncError.protocolViolation("missing post-update handshake") }
+                self.device.firmware = ack.firmwareVersion
+                self.saveDeviceStatus()
+                guard ack.firmwareVersion == expected, ack.firmwareVersion != self.pendingFirmwarePrevious else {
+                    throw SyncError.transport("reader restarted with \(ack.firmwareVersion); expected \(expected)")
+                }
+                self.firmwareTimeout?.cancel()
+                self.pendingFirmwareVersion = nil
+                self.firmwareActivity = "Firmware updated to \(ack.firmwareVersion)."
+                AppLog.post("Firmware update verified after reboot: \(ack.firmwareVersion)")
+                #if DEBUG
+                UserDefaults.standard.set(true, forKey: "paperboy.firmwareValidation.completed")
+                #endif
+            } catch {
+                self.pendingFirmwareVersion = nil
+                self.firmwareTimeout?.cancel()
+                self.firmwareActivity = nil
+                self.firmwareError = String(describing: error)
+                AppLog.post("Firmware verification failed: \(error)")
+            }
+        }
+    }
+
     // MARK: Background refresh
 
     /// Work for a background task: fetch within the time iOS allows.
-    func backgroundFetch(includeNYT: Bool, limitSeconds: Double) async -> Bool {
-        let summary = await fetch(reason: "background", includeNYT: includeNYT, limitSeconds: limitSeconds)
+    func backgroundFetch(includeWebSources: Bool, limitSeconds: Double) async -> Bool {
+        let summary = await fetch(reason: "background", includeWebSources: includeWebSources, limitSeconds: limitSeconds)
         return summary.failed == 0 || summary.added > 0
     }
 
@@ -435,25 +571,25 @@ extension SyncCoordinator {
         scheduler.register(forTaskWithIdentifier: Self.refreshTaskIdentifier, using: .main) { task in
             let box = BackgroundTaskBox(task: task)
             Task { @MainActor in
-                await SyncCoordinator.shared.runBackgroundTask(box, includeNYT: false, limitSeconds: 20)
+                await SyncCoordinator.shared.runBackgroundTask(box, includeWebSources: false, limitSeconds: 20)
             }
         }
         scheduler.register(forTaskWithIdentifier: Self.processingTaskIdentifier, using: .main) { task in
             let box = BackgroundTaskBox(task: task)
             Task { @MainActor in
-                await SyncCoordinator.shared.runBackgroundTask(box, includeNYT: true, limitSeconds: 240)
+                await SyncCoordinator.shared.runBackgroundTask(box, includeWebSources: true, limitSeconds: 240)
             }
         }
     }
 
-    private func runBackgroundTask(_ box: BackgroundTaskBox, includeNYT: Bool, limitSeconds: Double) async {
+    private func runBackgroundTask(_ box: BackgroundTaskBox, includeWebSources: Bool, limitSeconds: Double) async {
         scheduleBackgroundTasks()  // always queue the next one first
         // iOS calls the expiration handler on a queue of its choosing, so it must not be
         // main-actor isolated: hence the explicit @Sendable and the hop.
         box.task.expirationHandler = { @Sendable in
             Task { @MainActor in SyncCoordinator.shared.cancelBackgroundWork() }
         }
-        let ok = await backgroundFetch(includeNYT: includeNYT, limitSeconds: limitSeconds)
+        let ok = await backgroundFetch(includeWebSources: includeWebSources, limitSeconds: limitSeconds)
         box.task.setTaskCompleted(success: ok)
     }
 

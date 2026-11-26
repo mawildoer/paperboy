@@ -10,16 +10,18 @@ import AppKit
 typealias PlatformViewRepresentable = NSViewRepresentable  // only so the sources typecheck on a Mac
 #endif
 
-/// The two places the user signs in to.
+/// Publisher accounts available in the app.
 enum LoginService: String, CaseIterable, Identifiable, Sendable {
     case substack
     case nyt
+    case medium
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .substack: return "Substack"
+        case .medium: return "Medium"
         case .nyt: return "The New York Times"
         }
     }
@@ -27,6 +29,7 @@ enum LoginService: String, CaseIterable, Identifiable, Sendable {
     var loginURL: URL? {
         switch self {
         case .substack: return SubstackEndpoints.signIn
+        case .medium: return MediumDiscovery.loginURL
         case .nyt: return NYTDiscovery.loginURL
         }
     }
@@ -35,6 +38,7 @@ enum LoginService: String, CaseIterable, Identifiable, Sendable {
     var cookieDomainSuffix: String {
         switch self {
         case .substack: return "substack.com"
+        case .medium: return "medium.com"
         case .nyt: return "nytimes.com"
         }
     }
@@ -43,6 +47,7 @@ enum LoginService: String, CaseIterable, Identifiable, Sendable {
     var sessionCookieNames: Set<String> {
         switch self {
         case .substack: return SubstackEndpoints.sessionCookieNames
+        case .medium: return MediumDiscovery.sessionCookieNames
         case .nyt: return NYTDiscovery.sessionCookieNames
         }
     }
@@ -170,12 +175,31 @@ struct LoginSheet: View {
     let extraHosts: [String]
     let onFinish: (Bool) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var signInLink = ""
+    @State private var openedLink: URL?
 
     var body: some View {
         NavigationStack {
             Group {
-                if let url = service.loginURL {
-                    WebView(url: url)
+                if let url = openedLink ?? service.loginURL {
+                    VStack(spacing: 0) {
+                        WebView(url: url).id(url)
+                        if service == .medium {
+                            HStack {
+                                TextField("Paste email sign-in link", text: $signInLink)
+                                    .autocorrectionDisabled()
+                                    #if os(iOS)
+                                    .textInputAutocapitalization(.never)
+                                    #endif
+                                Button("Open") {
+                                    guard let link = URL(string: signInLink.trimmingCharacters(in: .whitespacesAndNewlines)),
+                                          link.scheme == "https", link.user == nil, link.password == nil, let host = link.host, MediumDiscovery.isMediumHost(host) else { return }
+                                    openedLink = link
+                                    signInLink = ""
+                                }
+                            }.padding()
+                        }
+                    }
                 } else {
                     Text("No sign-in page is configured.")
                 }

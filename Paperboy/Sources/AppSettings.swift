@@ -19,6 +19,10 @@ struct AppSettings: Codable, Equatable, Sendable {
     /// Most posts fetched in one run.
     var substackMaxPerFetch = 15
 
+    // Medium: monitor the signed-in Following page.
+    var mediumEnabled = true
+    var mediumMaxPerFetch = 15
+
     // NYT
     var nytEnabled = true
     /// RSS feeds (rss.nytimes.com) or section page URLs.
@@ -69,6 +73,8 @@ struct AppSettings: Codable, Equatable, Sendable {
         }
         favouritesSeeded = true
         autoLoadFavourites = try c.decodeIfPresent(Bool.self, forKey: .autoLoadFavourites) ?? d.autoLoadFavourites
+        mediumEnabled = try c.decodeIfPresent(Bool.self, forKey: .mediumEnabled) ?? d.mediumEnabled
+        mediumMaxPerFetch = try c.decodeIfPresent(Int.self, forKey: .mediumMaxPerFetch) ?? d.mediumMaxPerFetch
         nytEnabled = try c.decodeIfPresent(Bool.self, forKey: .nytEnabled) ?? d.nytEnabled
         nytFeeds = try c.decodeIfPresent([String].self, forKey: .nytFeeds) ?? d.nytFeeds
         nytDailyCap = try c.decodeIfPresent(Int.self, forKey: .nytDailyCap) ?? d.nytDailyCap

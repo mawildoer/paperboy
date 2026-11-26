@@ -66,7 +66,7 @@ SharePage.prototype = {
       let html = clone.outerHTML, result = null;
       try { result = paperboyReaderHTML(html, document.URL); } catch (_) {}
       args.completionFunction({url:document.URL,title:result?.title || document.title,
-        html:result?.html || html,readerExtracted:!!result});
+        html:result?.html || html,readerExtracted:!!result?.html});
     };
     Promise.allSettled(captures).then(finish);
     setTimeout(finish,1500);

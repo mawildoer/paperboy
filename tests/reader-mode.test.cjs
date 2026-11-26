@@ -5,13 +5,13 @@ const vm = require('node:vm');
 const {JSDOM} = require('jsdom');
 const path = require('node:path');
 const resource = path.join(__dirname,'../PaperboyCore/Sources/PaperboyCore/Resources');
-function extract(html) {
+function extract(html, url = "https://example.com/story") {
   const dom = new JSDOM('<html></html>',{runScripts:'outside-only',url:'https://example.com/story'});
   try {
     const context = dom.getInternalVMContext();
     vm.runInContext(fs.readFileSync(path.join(resource,'Readability.js'),'utf8'),context);
     vm.runInContext(fs.readFileSync(path.join(resource,'ReaderMode.js'),'utf8'),context);
-    return context.paperboyReaderHTML(html,'https://example.com/story');
+    return context.paperboyReaderHTML(html,url);
   } finally {dom.window.close();}
 }
 test('article extraction keeps paragraphs, a lazy chart, caption and metadata but drops ads and recommendations',()=>{
@@ -35,4 +35,29 @@ test('refuses navigation-only pages',()=>{
 test('Safari preprocessing bundle is reproducible',()=>{
   const expected = ['Readability.js','ReaderMode.js'].map(n=>fs.readFileSync(path.join(resource,n),'utf8')).join('') + fs.readFileSync(path.join(__dirname,'../scripts/SharePage.wrapper.js'),'utf8');
   assert.equal(fs.readFileSync(path.join(__dirname,'../Paperboy/ShareExtension/SharePage.js'),'utf8'),expected);
+});
+
+test('Medium member story preserves text, chart, author and publication time without recommendations',()=>{
+  const text='<p>This member story explains the experiment, its measurements and the observed trend in detail. Each chart plots a clear comparison over time, with confidence intervals and sources included so readers can assess the evidence.</p>'.repeat(6);
+  const result=extract(`<html><head><title>A member story</title><meta name="author" content="Ada Writer"><meta property="og:site_name" content="Medium"><meta property="article:published_time" content="2026-11-25T17:42:30Z"></head><body><article><h1>A member story</h1><div>Member-only story</div>${text}<figure><img src="https://miro.medium.com/chart.png" alt="Output chart"><figcaption>Figure 1: measured output</figcaption></figure></article><aside>Recommended from Medium</aside></body></html>`, 'https://medium.com/@ada/story-123456abcdef');
+  assert.ok(result?.html);
+  assert.match(result.html,/measured output/);
+  assert.match(result.html,/miro.medium.com/);
+  assert.ok(!result.html.includes('Recommended from Medium'));
+  assert.equal(result.author,'Ada Writer');
+  assert.equal(result.date,'2026-11-25T17:42:30Z');
+});
+test('Medium refuses a long paywall preview, including on custom domains',()=>{
+  const preview='<p>A substantial free preview can look like a complete article to a reader-mode extractor. This paragraph explains a few ideas, but the rest of this member story is still unavailable.</p>'.repeat(8);
+  for (const url of ['https://medium.com/@ada/story-123456abcdef','https://writing.example/story-123456abcdef']) {
+    const result=extract(`<html><head><title>Locked story</title><meta property="al:ios:app_name" content="Medium"></head><body><article>${preview}<div data-testid="paywall">Become a member to read this story</div></article></body></html>`, url);
+    assert.equal(result?.error,'medium-access-required');
+    assert.equal(result?.html,undefined);
+  }
+});
+
+test('hidden Medium paywall templates do not hide a readable member story',()=>{
+  const prose='<p>This full article discusses a detailed research result with useful observations, reproducible methods, measurements, and clearly stated conclusions for readers to evaluate.</p>'.repeat(7);
+  const result=extract(`<html><head><title>Accessible member story</title></head><body><article>${prose}</article><div hidden data-testid="paywall">Become a member to read</div></body></html>`, 'https://medium.com/@ada/story-123456abcdef');
+  assert.ok(result?.html);
 });

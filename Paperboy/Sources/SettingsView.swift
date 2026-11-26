@@ -40,6 +40,15 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle("Fetch Medium", isOn: $coordinator.settings.mediumEnabled)
+                    Stepper("Up to \(coordinator.settings.mediumMaxPerFetch) stories per fetch", value: $coordinator.settings.mediumMaxPerFetch, in: 1...50)
+                } header: {
+                    Text("Medium")
+                } footer: {
+                    Text("Uses your signed-in Medium Following page to find new stories. Sign in to Medium on the main page for member stories. Only stories your account can read are saved. You can also share a Medium story from Safari.")
+                }
+
+                Section {
                     Toggle("Fetch The New York Times", isOn: $coordinator.settings.nytEnabled)
                     Stepper("Up to \(coordinator.settings.nytDailyCap) articles a day", value: $coordinator.settings.nytDailyCap, in: 1...100)
                     ForEach(coordinator.settings.nytFeeds, id: \.self) { feed in
@@ -57,6 +66,15 @@ struct SettingsView: View {
                     Text("The New York Times")
                 } footer: {
                     Text("RSS feeds from rss.nytimes.com, or section page addresses.")
+                }
+
+                Section("Reader firmware") {
+                    if let version = coordinator.device.firmware { LabeledContent("Installed", value: version) }
+                    if let activity = coordinator.firmwareActivity { Text(activity) }
+                    if let error = coordinator.firmwareError { Text(error).foregroundStyle(.red) }
+                    Button("Update reader over Bluetooth") { coordinator.updateFirmware() }
+                        .disabled(coordinator.firmwareUpdating)
+                    Text("Keep the reader in Library and connected to USB, or charged above 30%. The reader restarts after installation. The first update adding Bluetooth support must be installed over USB.").font(.footnote).foregroundStyle(.secondary)
                 }
 
                 Section {

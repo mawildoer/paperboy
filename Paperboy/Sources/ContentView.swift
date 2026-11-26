@@ -22,6 +22,8 @@ struct ContentView: View {
                         if let error = coordinator.importError { Text(error).foregroundStyle(.red) }
                     }
                 }
+                if let activity = coordinator.firmwareActivity { Section("Firmware") { Text(activity) } }
+                if let error = coordinator.firmwareError { Section("Firmware") { Text(error).foregroundStyle(.red) } }
                 readerSection
                 sourcesSection
                 articlesSection
@@ -36,7 +38,7 @@ struct ContentView: View {
                 }
             }
             .refreshable {
-                await coordinator.fetch(reason: "pull to refresh", includeNYT: true, limitSeconds: 600)
+                await coordinator.fetch(reason: "pull to refresh", includeWebSources: true, limitSeconds: 600)
             }
         }
         .sheet(item: $loginService) { service in

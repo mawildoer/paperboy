@@ -6,6 +6,22 @@ Images are resolved relative to the source URL, capped at twelve, fetched sequen
 
 Two colors necessarily merge series that differ only by color; labels, symbols, and line patterns are preferable. The reader can scale figures to its display width, so very dense charts still need device testing. Automatic classification uses metadata hints and a sparse pale-background heuristic, not semantic understanding of a chart.
 
+## Medium
+
+Share a readable Medium page from Safari, or sign into Medium inside Paperboy to
+monitor its rendered Following page. There is no separate RSS subscription mode.
+The signed-in WebKit session loads story pages; local Readability extracts text,
+author, publication time, figures and captions. Explicit visible member-access
+walls are rejected, and feed teasers are not used as article bodies. A membership
+still needs access to that story. Hidden paywall templates and the label
+“Member-only story” alone do not reject an otherwise readable article.
+
+Following discovery depends on Medium's current page markup and session cookies;
+it does not use a supported public feed API. Live account login, member-only access,
+custom-domain behavior, and background refresh need validation with a real account.
+Do not promise every subscription or all historical stories; discovery uses the
+stories currently loaded on Following. Browser sharing remains available.
+
 ## PDF sharing
 
 Safari/Files can send a PDF attachment or file URL. The share extension uses an explicit PDF UTI activation predicate and copies the temporary provider file into its App Group before the provider callback returns. The main app also registers PDF Open In support and copies security-scoped documents while access is held. Queued PDFs are content-hashed so sharing the same bytes twice does not create duplicate articles.
@@ -18,6 +34,6 @@ Cloud/LLM extraction remains disabled, in accordance with the on-device-only req
 
 ## Verification
 
-137 Swift tests and four DOM extraction tests pass. PDF tests cover native text, scanned-page OCR, monochrome EPUB assets, stable-identity temporary-file handoff, malformed/oversized input, and page-limit rejection. A generated-plist test verifies PDF, link, text and webpage activation plus main-app document registration. Coverage includes the actual WebKit bridge, no publisher script execution, removal of ads/recommendations, lazy/responsive image URLs, exclusion of tracking pixels, data-URL image preparation, compressed PNG decoding, photo size limits, EPUB manifests/assets, and malformed input. An example 1200×700 chart shrank from about 52 KiB to 3.5 KiB at 1056px width. Physical e-reader rendering and Safari SVG/canvas capture still need device checks.
+145 Swift tests and seven DOM extraction tests pass. PDF tests cover native text, scanned-page OCR, monochrome EPUB assets, stable-identity temporary-file handoff, malformed/oversized input, and page-limit rejection. A generated-plist test verifies PDF, link, text and webpage activation plus main-app document registration. Coverage includes the actual WebKit bridge, no publisher script execution, removal of ads/recommendations, lazy/responsive image URLs, exclusion of tracking pixels, data-URL image preparation, compressed PNG decoding, photo size limits, EPUB manifests/assets, and malformed input. An example 1200×700 chart shrank from about 52 KiB to 3.5 KiB at 1056px width. Physical e-reader rendering and Safari SVG/canvas capture still need device checks.
 
 Processing applies to new imports and fetched articles. Previously cached EPUBs are not retroactively rewritten by this update. Cloud extraction and automatic refresh of already-cached EPUBs remain separate work.

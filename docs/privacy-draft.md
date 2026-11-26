@@ -17,3 +17,5 @@ Support/contact: to be finalized by the app owner before release. This draft is 
 Reader-mode extraction and image conversion run locally. Source images are requested directly from their hosting sites, using applicable publisher session cookies. No LLM or cloud document-processing service is enabled.
 
 PDFs shared from Safari/Files are copied into the local App Group inbox, then processed on the device with PDFKit, Core Graphics, and Apple Vision OCR. Reflowable text and monochrome page images are sent only to the paired reader. No PDF pages or OCR inputs are uploaded to an AI service. Temporary queue files are removed after a successful/duplicate import, or after three unsuccessful import attempts; the original shared file is not modified.
+
+When you request a reader firmware update, Paperboy contacts the project’s GitHub release API and downloads a firmware binary and checksum file. The image is sent to the paired reader over encrypted Bluetooth; neither your article library nor publisher credentials are sent to GitHub.
