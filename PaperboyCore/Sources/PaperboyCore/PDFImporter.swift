@@ -105,6 +105,17 @@ public enum PDFImporter {
         request.usesLanguageCorrection = false
         request.automaticallyDetectsLanguage = true
         request.preferBackgroundProcessing = true
+        #if os(macOS)
+        // Hosted Mac runners may not expose GPU/Neural Engine compute devices.
+        for (stage, devices) in try request.supportedComputeStageDevices {
+            if let cpu = devices.first(where: { device in
+                if case .cpu = device { return true }
+                return false
+            }) {
+                request.setComputeDevice(cpu, for: stage)
+            }
+        }
+        #endif
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
     }

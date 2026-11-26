@@ -32,6 +32,8 @@ Each run receives a build number of `100 + workflow run number`, followed by the
 
 All app workflows use GitHub's `xcode-27` runner and select `/Applications/Xcode_27.2.app/Contents/Developer`. `scripts/check-xcode.sh` requires iOS SDK 27 or newer before a distribution build; the upload script independently validates `DTSDKName` in the archived app and share extension. This addresses Apple's ITMS-90725 warning ahead of its April 2027 deadline. [GitHub runner software](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md).
 
+The macOS PDF OCR path explicitly selects supported CPU compute devices so that headless runners can execute the scanned-PDF recognition test without GPU/Neural Engine availability. The iPhone OCR path keeps Vision's normal compute-device selection.
+
 For an equivalent local upload, set the three `ASC_*` variables and a new `BUILD_NUMBER`, select full Xcode using `DEVELOPER_DIR`, then run `bash scripts/testflight.sh`. Optional `TEAM_ID` and `TESTFLIGHT_OUTPUT` override the team and output directory. The script refuses to replace an existing archive and stops if archiving or uploading fails.
 
 To recheck a build that was already uploaded, manually run **Validate TestFlight** on `main` and enter its build number. This workflow only reads Apple status; it does not create another build or send invitations. It uses the same three secrets, signs short-lived API tokens locally on the runner, prints processing/beta states and the app link, and removes its private-key file on exit. If Apple processing takes longer than 20 minutes, rerun this status check rather than uploading the same build again.
