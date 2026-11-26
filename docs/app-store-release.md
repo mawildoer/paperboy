@@ -32,7 +32,7 @@ Each run receives a build number of `100 + workflow run number`, followed by the
 
 All app workflows use GitHub's `xcode-27` runner and select `/Applications/Xcode_27.2.app/Contents/Developer`. `scripts/check-xcode.sh` requires iOS SDK 27 or newer before a distribution build; the upload script independently validates `DTSDKName` in the archived app and share extension. This addresses Apple's ITMS-90725 warning ahead of its April 2027 deadline. [GitHub runner software](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md).
 
-The macOS PDF OCR path selects supported CPU compute devices. If the accurate OCR backend reports `TextRecognition.CRImageReaderError`, it retries locally using Vision's fast engine. This preserves actual text recognition on affected macOS 27 runners; other failures propagate, and the scanned-PDF test still requires recognized text and the page image. The iPhone OCR path keeps Vision's normal accurate recognition and compute-device selection.
+The macOS PDF OCR path selects supported CPU compute devices. If the accurate OCR backend reports `TextRecognition.CRImageReaderError`, it retries locally using Vision's fast engine with language correction. Other failures propagate, and the scanned-PDF test still requires recognized text and the page image. The iPhone OCR path keeps Vision's normal accurate recognition and compute-device selection.
 
 For an equivalent local upload, set the three `ASC_*` variables and a new `BUILD_NUMBER`, select full Xcode using `DEVELOPER_DIR`, then run `bash scripts/testflight.sh`. Optional `TEAM_ID` and `TESTFLIGHT_OUTPUT` override the team and output directory. The script refuses to replace an existing archive and stops if archiving or uploading fails.
 

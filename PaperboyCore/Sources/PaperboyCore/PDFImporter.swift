@@ -125,6 +125,7 @@ public enum PDFImporter {
             // Retry locally with Vision's fast engine; other errors still propagate.
             guard (error as NSError).domain == "TextRecognition.CRImageReaderError" else { throw error }
             request.recognitionLevel = .fast
+            request.usesLanguageCorrection = true
             request.automaticallyDetectsLanguage = false
             try performOnCPU()
         }
