@@ -23,6 +23,10 @@ struct AppSettings: Codable, Equatable, Sendable {
     var mediumEnabled = true
     var mediumMaxPerFetch = 15
 
+    // Enabled when the user connects The Economist or turns on front-page fetching.
+    var economistEnabled = false
+    var economistMaxPerFetch = 10
+
     // NYT
     var nytEnabled = true
     /// RSS feeds (rss.nytimes.com) or section page URLs.
@@ -76,6 +80,8 @@ struct AppSettings: Codable, Equatable, Sendable {
         autoLoadFavourites = try c.decodeIfPresent(Bool.self, forKey: .autoLoadFavourites) ?? d.autoLoadFavourites
         mediumEnabled = try c.decodeIfPresent(Bool.self, forKey: .mediumEnabled) ?? d.mediumEnabled
         mediumMaxPerFetch = try c.decodeIfPresent(Int.self, forKey: .mediumMaxPerFetch) ?? d.mediumMaxPerFetch
+        economistEnabled = try c.decodeIfPresent(Bool.self, forKey: .economistEnabled) ?? d.economistEnabled
+        economistMaxPerFetch = try c.decodeIfPresent(Int.self, forKey: .economistMaxPerFetch) ?? d.economistMaxPerFetch
         nytEnabled = try c.decodeIfPresent(Bool.self, forKey: .nytEnabled) ?? d.nytEnabled
         nytFeeds = try c.decodeIfPresent([String].self, forKey: .nytFeeds) ?? d.nytFeeds
         nytDailyCap = try c.decodeIfPresent(Int.self, forKey: .nytDailyCap) ?? d.nytDailyCap
@@ -123,18 +129,5 @@ final class AppLog: ObservableObject {
     /// For callbacks that arrive off the main actor.
     nonisolated static func post(_ message: String) {
         Task { @MainActor in shared.add(message) }
-    }
-}
-
-/// What one fetch run did.
-struct FetchSummary: Sendable {
-    var added = 0
-    var failed = 0
-    var notes: [String] = []
-
-    mutating func merge(_ other: FetchSummary) {
-        added += other.added
-        failed += other.failed
-        notes += other.notes
     }
 }

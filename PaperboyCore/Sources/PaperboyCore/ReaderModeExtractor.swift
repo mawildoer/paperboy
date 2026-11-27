@@ -17,6 +17,24 @@ public final class ReaderModeExtractor: NSObject, WKNavigationDelegate {
         web.navigationDelegate = self
     }
 
+    /// Capture the visible article in an already loaded Economist page, using its current session.
+    /// The returned HTML includes its origin and can be passed to article(html:url:title:).
+    public static func economistSnapshot(in webView: WKWebView) async throws -> String {
+        let value = try await webView.callAsyncJavaScript(
+            readerScript() + "\nreturn paperboyEconomistSnapshot(document);",
+            arguments: [:], in: nil, contentWorld: .defaultClient)
+        guard let result = value as? [String: Any], let html = result["html"] as? String else {
+            throw EconomistAccessError.accessRequired
+        }
+        return html
+    }
+
+    private static func readerScript() throws -> String {
+        let library = try String(contentsOf: Bundle.module.url(forResource: "Readability", withExtension: "js")!, encoding: .utf8)
+        let wrapper = try String(contentsOf: Bundle.module.url(forResource: "ReaderMode", withExtension: "js")!, encoding: .utf8)
+        return library + "\n" + wrapper
+    }
+
     public func article(html: String, url: String, title: String? = nil) async throws -> Article {
         guard !extracting else { throw URLError(.resourceUnavailable) }
         extracting = true
@@ -46,13 +64,15 @@ public final class ReaderModeExtractor: NSObject, WKNavigationDelegate {
             loaded = continuation
             web.loadHTMLString("<html><body></body></html>", baseURL: nil)
         }
-        let library = try String(contentsOf: Bundle.module.url(forResource: "Readability", withExtension: "js")!, encoding: .utf8)
-        let wrapper = try String(contentsOf: Bundle.module.url(forResource: "ReaderMode", withExtension: "js")!, encoding: .utf8)
-        _ = try await web.evaluateJavaScript(library + "\n" + wrapper)
         let value = try await web.callAsyncJavaScript(
-            "return paperboyReaderHTML(html, url);", arguments: ["html": html, "url": url], in: nil, contentWorld: .page)
-        if let result = value as? [String: Any], result["error"] as? String == "medium-access-required" {
-            throw MediumError.accessRequired
+            Self.readerScript() + "\nreturn paperboyReaderHTML(html, url);",
+            arguments: ["html": html, "url": url], in: nil, contentWorld: .defaultClient)
+        if let result = value as? [String: Any] {
+            switch result["error"] as? String {
+            case "economist-access-required": throw EconomistAccessError.accessRequired
+            case "medium-access-required": throw MediumError.accessRequired
+            default: break
+            }
         }
         guard let result = value as? [String: Any], let body = result["html"] as? String else {
             throw PageExtractorError.noArticleText(words: 0)

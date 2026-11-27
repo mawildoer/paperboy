@@ -56,7 +56,8 @@ final class SyncCoordinator: ObservableObject {
     let bluetooth = BluetoothTransport()
     private let substack = SubstackSource()
     private let nyt = NYTSource()
-    private let medium = MediumSource()
+    private let medium = WebPublicationSource(.medium, loadPage: PublicationPage.snapshot)
+    private let economist = WebPublicationSource(.economist, loadPage: PublicationPage.snapshot)
     private var store: ArticleStore?
     private var fetchTask: Task<FetchSummary, Never>?
     private var syncTask: Task<Void, Never>?
@@ -200,7 +201,9 @@ final class SyncCoordinator: ObservableObject {
                     page.url = publisher.absoluteString
                     page.html = nil
                 }
-                let canonical = URLCanonicalizer.canonicalize(page.url)
+                let sharedURL = URL(string: page.url)
+                let economistID = sharedURL.flatMap(EconomistDiscovery.storyURL)
+                let canonical = economistID?.absoluteString ?? URLCanonicalizer.canonicalize(page.url)
                 let id = ArticleID(canonicalURL: canonical)
                 if let known = await store.article(id), !known.isRetired {
                     try await store.setLoad(id, known.read || known.load == .lock ? .lock : .load)
@@ -210,7 +213,8 @@ final class SyncCoordinator: ObservableObject {
                     continue
                 }
                 var article = try await article(forShared: page)
-                article.url = canonical
+                // Short and gift links may resolve to a different, canonical Economist story.
+                if page.pdfFile != nil || !WebPublicationSource.isEconomistShare(sharedURL) { article.url = canonical }
                 article = await ArticleImagePipeline.prepare(article)
                 let stored = try await store.addShared(article)
                 removeQueued(page, record: file, container: container)
@@ -240,6 +244,9 @@ final class SyncCoordinator: ObservableObject {
                 guard size <= PDFInbox.maxBytes else { throw PDFInbox.Failure.tooLarge }
                 return try PDFImporter.article(data: Data(contentsOf: file, options: .mappedIfSafe), url: page.url, title: page.title, now: page.sharedAt)
             }.value
+        }
+        if let url = URL(string: page.url), WebPublicationSource.isEconomistShare(url) {
+            return try await economist.sharedArticle(url: url, snapshot: page.html, title: page.title)
         }
         if let html = page.html,
            let article = try? await ReaderModeExtractor().article(html: html, url: page.url, title: page.title) {
@@ -314,7 +321,7 @@ final class SyncCoordinator: ObservableObject {
     }
 
     func refreshLoginStatus() async {
-        for service in LoginService.allCases {
+        for service in LoginService.allCases where service != .economist {
             let hosts = service == .substack ? settings.substackPublications : []
             await WebSession.logCookieState(service, when: "before copy")
             // Copying on every refresh keeps URLSession's cookies as fresh as the web view's.
@@ -325,13 +332,19 @@ final class SyncCoordinator: ObservableObject {
 
     func loginFinished(_ service: LoginService) {
         if service == .nyt { nyt.resetBotCheck() }
+        if service == .economist { settings.economistEnabled = true }
         Task {
             await refreshLoginStatus()
+            if service == .economist { await processSharedInbox() }
             _ = await fetch(reason: "signed in", includeWebSources: true, limitSeconds: 600)
         }
     }
 
     func signOut(_ service: LoginService) {
+        if service == .economist {
+            settings.economistEnabled = false
+            cancelFetch()
+        }
         Task {
             await WebSession.signOut(service)
             await refreshLoginStatus()
@@ -372,20 +385,26 @@ final class SyncCoordinator: ObservableObject {
         let substack = self.substack
         let nyt = self.nyt
         let medium = self.medium
+        let economist = self.economist
         AppLog.shared.add("Fetch (\(reason)) started")
         if activity == nil { activity = "Fetching articles…" }
 
         let task = Task { @MainActor () -> FetchSummary in
             var summary = FetchSummary()
+            let oldest = Date().addingTimeInterval(-settings.unreadDays * 86_400)
+            async let economistResult = settings.economistEnabled && includeWebSources
+                ? economist.fetchNew(store: store, maxPerFetch: settings.economistMaxPerFetch, oldest: oldest, deadline: deadline, didStore: AppLog.post)
+                : FetchSummary()
             if settings.substackEnabled {
                 summary.merge(await substack.fetchNew(settings: settings, store: store, deadline: deadline))
             }
-            if settings.mediumEnabled, includeWebSources, !Task.isCancelled, Date() < deadline {
-                summary.merge(await medium.fetchNew(settings: settings, store: store, deadline: deadline))
+            if settings.mediumEnabled, includeWebSources, !Task.isCancelled, Date() < deadline, await WebSession.isSignedIn(.medium) {
+                summary.merge(await medium.fetchNew(store: store, maxPerFetch: settings.mediumMaxPerFetch, oldest: oldest, deadline: deadline, didStore: AppLog.post))
             }
             if settings.nytEnabled, includeWebSources, !Task.isCancelled, Date() < deadline {
                 summary.merge(await nyt.fetchNew(settings: settings, store: store, deadline: deadline))
             }
+            summary.merge(await economistResult)
             return summary
         }
         fetchTask = task

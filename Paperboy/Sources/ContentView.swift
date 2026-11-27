@@ -46,7 +46,7 @@ struct ContentView: View {
             }
         }
         .sheet(item: $loginService) { service in
-            LoginSheet(service: service, extraHosts: service == .substack ? coordinator.settings.substackPublications : []) { _ in
+            LoginSheet(service: service, extraHosts: service == .substack ? coordinator.settings.substackPublications : []) {
                 coordinator.loginFinished(service)
             }
         }
@@ -121,12 +121,18 @@ struct ContentView: View {
                 HStack {
                     VStack(alignment: .leading) {
                         Text(service.displayName)
-                        Text(coordinator.signedIn[service] == true ? "Signed in" : "Not signed in")
-                            .font(.footnote)
-                            .foregroundStyle(coordinator.signedIn[service] == true ? .green : .secondary)
+                        if service == .economist {
+                            Text(coordinator.settings.economistEnabled ? "Front-page sync on" : "Front-page sync off")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        } else {
+                            Text(coordinator.signedIn[service] == true ? "Signed in" : "Not signed in")
+                                .font(.footnote)
+                                .foregroundStyle(coordinator.signedIn[service] == true ? .green : .secondary)
+                        }
                     }
                     Spacer()
-                    Button(coordinator.signedIn[service] == true ? "Open" : "Sign in") { loginService = service }
+                    let connected = service == .economist ? coordinator.settings.economistEnabled : coordinator.signedIn[service] == true
+                    Button(connected ? "Open" : "Sign in") { loginService = service }
                         .buttonStyle(.borderless)
                 }
             }

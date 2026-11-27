@@ -81,3 +81,139 @@ test('strips unclassed ad labels, accessibility controls and semantic ad slots a
     assert.equal(content.querySelectorAll('img').length, 1);
   }
 });
+
+const economistURL = 'https://www.economist.com/finance-and-economics/2026/11/20/a-city-counts-its-buses';
+const accessRequired = 'economist-access-required';
+const economistHead = `<head><title>A city counts its buses</title><meta name="author" content="Ada Writer">
+  <meta property="og:site_name" content="The Economist"><meta property="article:published_time" content="2026-11-20T12:00:00Z"></head>`;
+const reporting = `<p>The new timetable answered a question passengers had asked for years. Each morning a team counted the buses that actually reached the station before the first train departed.</p>
+  <p>Early returns favoured the smaller routes, where drivers could wait for a late connection. On the main road a short delay at the bridge would ripple through the whole timetable.</p>
+  <p>In the final count, the busiest route had gained the most. The city published its observations alongside the timetable so passengers could compare the two for themselves.</p>`;
+const paidPayload = 'UNDISCLOSED_CONTINUATION';
+const fullEconomist = `${economistHead}<body><nav>Log in | Subscribe</nav>
+  <main><article><header><h1>A city counts its buses</h1></header>${reporting}
+  <figure><img src="/images/bus.png" alt="Bus frequency"><figcaption>Morning departures by route</figcaption></figure>
+  <footer><h2>Subscribe to The Economist</h2><p>Get unlimited access to our journalism.</p>
+    <a href="/subscribe">Subscribe now</a> Already a subscriber? Log in</footer></article></main>
+  <div hidden data-testid="paywall">Subscribe to continue reading</div></body>`;
+const wallEconomist = `${economistHead}<body><main><article><h1>A city counts its buses</h1>${reporting.repeat(3)}</article>
+  <aside data-test-id="paywall"><h2>Subscribe to continue reading</h2><button>View subscription options</button></aside>
+  <div hidden><p>${paidPayload}</p></div><script type="application/ld+json">{"articleBody":"${paidPayload}"}</script>
+  </main></body>`;
+
+// Exercise the shipped Safari bundle and the exact JS entry point called by WKWebView.
+async function rendered(html, method, url = economistURL) {
+  const dom = new JSDOM(html, {url, runScripts:'outside-only'});
+  try {
+    const context = dom.getInternalVMContext();
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../Paperboy/ShareExtension/SharePage.js'), 'utf8'), context);
+    if (method === 'snapshot') return context.paperboyEconomistSnapshot(context.document);
+    return await new Promise(resolve => context.ExtensionPreprocessingJS.run({completionFunction: resolve}));
+  } finally { dom.window.close(); }
+}
+
+function assertFullEconomist(result) {
+  assert.equal(result?.error, undefined);
+  assert.ok(result?.html);
+  assert.match(result.html, /In the final count/);
+  assert.match(result.html, /Morning departures by route/);
+  assert.match(result.html, /https:\/\/www\.economist\.com\/images\/bus\.png/);
+  assert.doesNotMatch(result.html, /subscription options|unlimited access|subscribe now|UNDISCLOSED_CONTINUATION/i);
+  assert.equal(result.title, 'A city counts its buses');
+}
+
+test('Economist full article keeps the conclusion, chart and metadata with a footer subscription offer', () => {
+  const result = extract(fullEconomist, economistURL);
+  assertFullEconomist(result);
+  assert.equal(result.author, 'Ada Writer');
+  assert.equal(result.source, 'The Economist');
+  assert.equal(result.date, '2026-11-20T12:00:00Z');
+});
+
+test('Economist refuses a substantial preview with a visible wall outside the article', () => {
+  const result = extract(wallEconomist, economistURL);
+  assert.equal(result?.error, accessRequired);
+  assert.equal(result?.html, undefined);
+});
+
+test('Economist checks textual gates, teaser-only markup, challenges and login redirects', async () => {
+  for (const [markup, url] of [
+    [`<article>${reporting}</article><form><strong>Subscribe</strong> to read the full article</form>`, economistURL],
+    [`<article>${reporting}</article><section><h2>To continue reading this article, please subscribe</h2></section>`, economistURL],
+    [`<article>${reporting}</article><div class="tp-modal"><iframe title="Subscribe"></iframe></div>`, economistURL],
+    [`<article><header>${reporting}</header></article><aside>${reporting}</aside>`, economistURL],
+    [`<article><div class="article__teaser">${reporting}</div></article>`, economistURL],
+    [`<article>${reporting}<div hidden itemprop="articleBody"><p>${paidPayload}</p></div></article>`, economistURL],
+    [`<h1>Verify you are human</h1><article>${reporting}</article>`, economistURL],
+    [`<title>Just a moment...</title><article>${reporting}</article>`, economistURL],
+    [fullEconomist, 'https://myaccount.economist.com/login'],
+    [fullEconomist, 'https://www.economist.com/sign-in?next=/article'],
+  ]) {
+    assert.equal(extract(markup, url)?.error, accessRequired, url);
+  }
+  const onForeignLogin = await rendered(fullEconomist, 'snapshot', 'https://economist.com.example/login');
+  assert.equal(onForeignLogin.error, accessRequired);
+  assert.equal(onForeignLogin.html, undefined);
+  assert.ok(extract(wallEconomist, 'https://economist.com.example/story')?.html);
+});
+
+test('detached Economist extraction excludes hidden and inert payloads and refuses unresolved stylesheets', () => {
+  const payloads = ['hidden', 'inert', 'aria-hidden="true"', 'style="display: none !important"',
+    'style="visibility: hidden"', 'style="opacity: 0"', 'style="content-visibility: hidden"'];
+  const concealed = payloads.map(attributes => `<div ${attributes}><p>${paidPayload}</p></div>`).join('');
+  const html = fullEconomist.replace('</article>', `${concealed}<template>${paidPayload}</template>
+    <noscript><p>${paidPayload}</p></noscript><details><p>${paidPayload}</p></details>
+    <div data-hidden-state="${paidPayload}"></div><img src="/placeholder.png" data-src="/${paidPayload}.png">
+    <script type="application/json">{"articleBody":"${paidPayload}"}</script></article>`);
+  assertFullEconomist(extract(html, economistURL));
+  for (const stylesheet of ['<style>.extra {display:none}</style>', '<link rel="stylesheet" href="/site.css">']) {
+    const result = extract(html.replace('</head>', stylesheet + '</head>'), economistURL);
+    assert.equal(result?.error, accessRequired);
+    assert.equal(result?.html, undefined);
+  }
+  const clipped = fullEconomist.replace('</article>', `<div style="max-height:3em; overflow:hidden"><p>${paidPayload}</p></div></article>`);
+  assert.equal(extract(clipped, economistURL)?.error, accessRequired);
+});
+
+test('Safari and WKWebView only snapshot visible Economist text and keep it on the second pass', async () => {
+  const styled = fullEconomist
+    .replace('</head>', '<style>.unavailable { display:none }</style></head>')
+    .replace('</article>', `<div class="unavailable"><p>${paidPayload}</p></div></article>`)
+    .replace('<div hidden data-testid', '<div class="unavailable" data-testid');
+  for (const method of ['safari', 'snapshot']) {
+    const result = await rendered(styled, method);
+    assertFullEconomist(result);
+    if (method === 'safari') {
+      assert.equal(result.url, economistURL);
+      assert.equal(result.readerExtracted, true);
+    }
+    const again = extract(result.html, economistURL);
+    assertFullEconomist(again);
+    assert.equal(again.author, 'Ada Writer');
+    assert.equal(again.date, '2026-11-20T12:00:00Z');
+    assert.match(again.html, /paperboy-reader-origin/);
+  }
+});
+
+test('Safari persists a content-free access error through the inbox HTML-only handoff', async () => {
+  const snapshot = await rendered(wallEconomist, 'snapshot');
+  assert.equal(snapshot.error, accessRequired);
+  assert.equal(snapshot.html, undefined);
+  const shared = await rendered(wallEconomist, 'safari');
+  assert.equal(shared.url, economistURL);
+  assert.equal(shared.readerExtracted, false);
+  assert.equal(shared.error, accessRequired);
+  assert.ok(!shared.html.includes(paidPayload));
+  assert.doesNotMatch(shared.html, /new timetable|View subscription options/);
+  const record = new JSDOM(shared.html);
+  try {
+    assert.equal(record.window.document.body.textContent, '');
+    assert.equal(record.window.document.querySelector('meta[name="paperboy-reader-origin"]').content, economistURL);
+  } finally { record.window.close(); }
+  // The extension drops arbitrary JS result fields when it writes {url, title, html}.
+  for (const url of [shared.url, 'https://example.org/share']) {
+    const again = extract(shared.html, url);
+    assert.equal(again?.error, accessRequired);
+    assert.equal(again?.html, undefined);
+  }
+});

@@ -15,12 +15,14 @@ enum LoginService: String, CaseIterable, Identifiable, Sendable {
     case substack
     case nyt
     case medium
+    case economist
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .substack: return "Substack"
+        case .economist: return "The Economist"
         case .medium: return "Medium"
         case .nyt: return "The New York Times"
         }
@@ -29,6 +31,7 @@ enum LoginService: String, CaseIterable, Identifiable, Sendable {
     var loginURL: URL? {
         switch self {
         case .substack: return SubstackEndpoints.signIn
+        case .economist: return URL(string: EconomistDiscovery.frontPageURL)
         case .medium: return MediumDiscovery.loginURL
         case .nyt: return NYTDiscovery.loginURL
         }
@@ -38,6 +41,7 @@ enum LoginService: String, CaseIterable, Identifiable, Sendable {
     var cookieDomainSuffix: String {
         switch self {
         case .substack: return "substack.com"
+        case .economist: return "economist.com"
         case .medium: return "medium.com"
         case .nyt: return "nytimes.com"
         }
@@ -47,6 +51,7 @@ enum LoginService: String, CaseIterable, Identifiable, Sendable {
     var sessionCookieNames: Set<String> {
         switch self {
         case .substack: return SubstackEndpoints.sessionCookieNames
+        case .economist: return []  // WebKit owns this session. Access is checked on each story.
         case .medium: return MediumDiscovery.sessionCookieNames
         case .nyt: return NYTDiscovery.sessionCookieNames
         }
@@ -136,8 +141,14 @@ enum WebSession {
     }
 
     static func signOut(_ service: LoginService) async {
+        if service == .economist {
+            let types = WKWebsiteDataStore.allWebsiteDataTypes()
+            let records = await dataStore.dataRecords(ofTypes: types).filter { $0.displayName == "economist.com" }
+            await dataStore.removeData(ofTypes: types, for: records)
+        }
         let store = dataStore.httpCookieStore
-        for cookie in await cookies() where cookie.domain.lowercased().hasSuffix(service.cookieDomainSuffix) {
+        for cookie in await cookies() where cookie.domain.trimmingCharacters(in: ["."]).lowercased() == service.cookieDomainSuffix
+            || cookie.domain.lowercased().hasSuffix("." + service.cookieDomainSuffix) {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 store.delete(cookie) { continuation.resume() }
             }
@@ -173,7 +184,7 @@ struct WebView: PlatformViewRepresentable {
 struct LoginSheet: View {
     let service: LoginService
     let extraHosts: [String]
-    let onFinish: (Bool) -> Void
+    let onFinish: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var signInLink = ""
     @State private var openedLink: URL?
@@ -183,6 +194,10 @@ struct LoginSheet: View {
             Group {
                 if let url = openedLink ?? service.loginURL {
                     VStack(spacing: 0) {
+                        if service == .economist {
+                            Text("Log in on The Economist website, then tap Use this session to sync front-page stories.")
+                                .font(.footnote).padding(.horizontal)
+                        }
                         WebView(url: url).id(url)
                         if service == .medium {
                             HStack {
@@ -207,10 +222,10 @@ struct LoginSheet: View {
             .navigationTitle(service.displayName)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
+                    Button(service == .economist ? "Use this session" : "Done") {
                         Task {
-                            let signedIn = await WebSession.copyCookies(for: service, alsoHosts: extraHosts)
-                            onFinish(signedIn)
+                            if service != .economist { await WebSession.copyCookies(for: service, alsoHosts: extraHosts) }
+                            onFinish()
                             dismiss()
                         }
                     }

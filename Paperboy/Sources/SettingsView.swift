@@ -49,6 +49,15 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle("Fetch The Economist", isOn: $coordinator.settings.economistEnabled)
+                    Stepper("Up to \(coordinator.settings.economistMaxPerFetch) stories per fetch", value: $coordinator.settings.economistMaxPerFetch, in: 1...50)
+                } header: {
+                    Text("The Economist")
+                } footer: {
+                    Text("Fetch new front-page stories using your Economist website session. Share a story from Safari or The Economist app to load it on the reader.")
+                }
+
+                Section {
                     Toggle("Fetch The New York Times", isOn: $coordinator.settings.nytEnabled)
                     Stepper("Up to \(coordinator.settings.nytDailyCap) articles a day", value: $coordinator.settings.nytDailyCap, in: 1...100)
                     ForEach(coordinator.settings.nytFeeds, id: \.self) { feed in
@@ -93,7 +102,7 @@ struct SettingsView: View {
                         .disabled(bluetooth.knownReader == nil)
                     ForEach(LoginService.allCases) { service in
                         Button("Sign out of \(service.displayName)", role: .destructive) { coordinator.signOut(service) }
-                            .disabled(coordinator.signedIn[service] != true)
+                            .disabled(service != .economist && coordinator.signedIn[service] != true)
                     }
                 } header: {
                     Text("Reader and accounts")

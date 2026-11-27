@@ -18,6 +18,12 @@ Open a story in Apple News, choose **Share → Paperboy**, then let Paperboy syn
 
 Access depends on what the publisher makes available on the web. Apple News+ access inside News does not grant a separate publisher login. Apple’s documented News API is for publishers. Paperboy supports individual shares and does not monitor a personal Following or Today feed. [Apple News API](https://developer.apple.com/documentation/applenewsapi)
 
+## The Economist
+
+The Economist uses its persistent in-app WebKit session. Selecting **Use this session** enables front-page discovery. Foreground refreshes and scheduled website fetches discover dated story links in front-page order. The per-fetch limit and library retention window apply. Fetched items appear in the phone library, and shared items enter the reader load queue.
+
+Safari can supply the readable page directly. A URL-only share, including one from The Economist app, opens in the Paperboy website session. A gift URL retains its query when sent to the publisher. The library uses the story URL without its tracking or gift parameters for deduplication. A publisher sign-in, subscription prompt or verification screen can require action in the website session.
+
 ## Medium
 
 Share a readable Medium page from Safari, or sign into Medium inside Paperboy to
