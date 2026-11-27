@@ -191,6 +191,8 @@ public actor ArticleStore {
     @discardableResult
     public func add(_ article: Article, fetchedAt: Date = Date(), load: LoadState = .off) throws -> StoredArticle {
         if let existing = articles[article.id] { return existing }
+        var article = article
+        if article.source != "PDF" { article.bodyXHTML = ArticleAdControls.clean(article.bodyXHTML) }
         let epub = try EpubBuilder.build(article)
         return try add(
             id: article.id, url: article.url, source: article.source, title: article.title, author: article.author,
@@ -212,6 +214,20 @@ public actor ArticleStore {
         articles[id] = stored
         try save()
         return stored
+    }
+
+    /// A feed fetch may have added the publisher URL while a shared story was being extracted.
+    public func addShared(_ article: Article) throws -> StoredArticle {
+        if let existing = articles[article.id] {
+            if !existing.isRetired {
+                try setLoad(article.id, existing.read || existing.load == .lock ? .lock : .load)
+                return articles[article.id] ?? existing
+            }
+            articles[article.id] = nil
+            do { return try add(article, load: .load) }
+            catch { articles[article.id] = existing; throw error }
+        }
+        return try add(article, load: .load)
     }
 
     /// Queue a metadata-only promotion; leave the EPUB, load state and progress untouched.
@@ -291,19 +307,47 @@ public actor ArticleStore {
         return String(cut[..<end]) + "…"
     }
 
-    /// Fill in previews for articles stored before previews existed, from their EPUB.
+    /// Repair old previews and the phone's EPUB together using the already cached chapter.
     public func backfillPreviews() throws {
         var changed = false
-        for (id, var article) in articles where article.preview.isEmpty && !article.isRetired {
-            guard let data = try? Data(contentsOf: fileURL(for: id)),
+        for (id, var article) in articles where !article.isRetired &&
+            (article.preview.isEmpty || (article.source != "PDF" && ArticleAdControls.mayStartWithControl(article.preview))) {
+            let url = fileURL(for: id)
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
                   let reader = try? ZipReader(data),
                   let chapter = try? reader.contents(named: "OEBPS/article.xhtml") else { continue }
             let page = String(decoding: chapter, as: UTF8.self)
-            // Skip the head, title and byline the builder puts before the body text.
-            let body = page.range(of: "<hr/>").map { String(page[$0.upperBound...]) } ?? page
-            let preview = Self.preview(ofXHTML: body)
-            guard !preview.isEmpty else { continue }
+            guard let start = page.range(of: "<hr/>")?.upperBound,
+                  let end = page.range(of: "</body>", options: .backwards)?.lowerBound, start <= end else {
+                if article.preview.isEmpty {
+                    article.preview = Self.preview(ofXHTML: page)
+                    if !article.preview.isEmpty { articles[id] = article; changed = true }
+                }
+                continue
+            }
+            let body = String(page[start..<end])
+            let cleaned = article.source == "PDF" ? body : ArticleAdControls.clean(body)
+            var payload = data
+            if cleaned != body {
+                let replacement = page.replacingCharacters(in: start..<end, with: cleaned)
+                // Paperboy creates stored ZIP entries. Keep their order and every other resource.
+                guard reader.entries.allSatisfy({ $0.method == 0 }) else { continue }
+                do {
+                    var writer = ZipWriter(modified: article.date)
+                    for entry in reader.entries {
+                        let contents = entry.name == "OEBPS/article.xhtml" ? Data(replacement.utf8) : try reader.contents(of: entry)
+                        try writer.add(name: entry.name, contents: contents)
+                    }
+                    payload = try writer.finish()
+                    try payload.write(to: url, options: .atomic)
+                } catch { continue }
+            }
+            let preview = Self.preview(ofXHTML: cleaned)
+            // If interrupted after the EPUB replacement, the old preview selects it again on launch.
+            guard cleaned != body || preview != article.preview || article.size != payload.count else { continue }
             article.preview = preview
+            article.size = payload.count
+            article.crc32 = CRC32.checksum(payload)
             articles[id] = article
             changed = true
         }

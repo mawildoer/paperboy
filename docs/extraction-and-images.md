@@ -6,6 +6,18 @@ Images are resolved relative to the source URL, capped at twelve, fetched sequen
 
 Two colors necessarily merge series that differ only by color; labels, symbols, and line patterns are preferable. The reader can scale figures to its display width, so very dense charts still need device testing. Automatic classification uses metadata hints and a sparse pale-background heuristic, not semantic understanding of a chart.
 
+## Web articles and ad controls
+
+The web extractor uses local reader-mode heuristics. NYT also has a structured-data fallback. Paperboy removes ad slots and skip links before reader mode flattens them into text, then removes standalone ad labels from the generated article. A sentence discussing advertising or quoting a skip link remains readable.
+
+At launch, Paperboy checks old previews that begin with ad controls and rebuilds the affected phone EPUB and preview from the local chapter. This keeps images, article identity and library state. Copies already on the e-reader keep their reading position. A subsequent fresh transfer uses the cleaned file.
+
+## Apple News
+
+Open a story in Apple News, choose **Share → Paperboy**, then let Paperboy sync as usual. Paperboy follows the share link to the publisher’s web edition and uses the same import and signed-in sources as a direct publisher share. Sharing both links queues a single article. If Apple supplies no publisher link, Paperboy explains how to share from Safari when a web edition exists.
+
+Access depends on what the publisher makes available on the web. Apple News+ access inside News does not grant a separate publisher login. Apple’s documented News API is for publishers. Paperboy supports individual shares and does not monitor a personal Following or Today feed. [Apple News API](https://developer.apple.com/documentation/applenewsapi)
+
 ## Medium
 
 Share a readable Medium page from Safari, or sign into Medium inside Paperboy to
@@ -34,6 +46,4 @@ Cloud/LLM extraction remains disabled, in accordance with the on-device-only req
 
 ## Verification
 
-145 Swift tests and seven DOM extraction tests pass. PDF tests cover native text, scanned-page OCR, monochrome EPUB assets, stable-identity temporary-file handoff, malformed/oversized input, and page-limit rejection. A generated-plist test verifies PDF, link, text and webpage activation plus main-app document registration. Coverage includes the actual WebKit bridge, no publisher script execution, removal of ads/recommendations, lazy/responsive image URLs, exclusion of tracking pixels, data-URL image preparation, compressed PNG decoding, photo size limits, EPUB manifests/assets, and malformed input. An example 1200×700 chart shrank from about 52 KiB to 3.5 KiB at 1056px width. Physical e-reader rendering and Safari SVG/canvas capture still need device checks.
-
-Processing applies to new imports and fetched articles. Previously cached EPUBs are not retroactively rewritten by this update. Cloud extraction and automatic refresh of already-cached EPUBs remain separate work.
+PDF tests cover native text, scanned-page OCR, monochrome EPUB assets, stable-identity temporary-file handoff, malformed/oversized input, and page-limit rejection. A generated-plist test verifies PDF, link, text and webpage activation plus main-app document registration. Coverage includes the actual WebKit bridge, no publisher script execution, removal of ads/recommendations, lazy/responsive image URLs, exclusion of tracking pixels, data-URL image preparation, compressed PNG decoding, photo size limits, EPUB manifests/assets, and malformed input. An example 1200×700 chart shrank from about 52 KiB to 3.5 KiB at 1056px width. Physical e-reader rendering and Safari SVG/canvas capture still need device checks.

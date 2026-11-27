@@ -185,6 +185,12 @@ private struct Emitter {
 
     static func isDropped(_ node: HTMLNode) -> Bool {
         if dropped.contains(node.name) || ["aside", "footer"].contains(node.name) { return true }
+        let attributes = node.attributes
+        if !["html", "body", "main", "article"].contains(node.name),
+           attributes["data-ad-slot"] != nil || attributes["data-ad-unit"] != nil ||
+           attributes["aria-label"]?.lowercased() == "advertisement" ||
+           attributes["aria-roledescription"]?.lowercased() == "advertisement" ||
+           ["ad", "ad-slot", "advertisement"].contains(attributes["data-testid"]?.lowercased() ?? "") { return true }
         let role = (node.attributes["role"] ?? "").lowercased()
         if ["navigation", "banner", "contentinfo", "complementary", "dialog"].contains(role) { return true }
         let identifier = (node.attributes["id"] ?? "").lowercased()

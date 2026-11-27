@@ -193,30 +193,34 @@ final class SyncCoordinator: ObservableObject {
                 try? FileManager.default.removeItem(at: file)
                 continue
             }
-            let canonical = URLCanonicalizer.canonicalize(page.url)
-            let id = ArticleID(canonicalURL: canonical)
-            if let known = await store.article(id), !known.isRetired {
-                // Shared again: put it (back) on the reader, and keep it there if it was read.
-                try? await store.setLoad(id, known.read ? .lock : .load)
-                removeQueued(page, record: file, container: container)
-                AppLog.post("Shared: \(known.title) is already in the list; loading it")
-                continue
-            }
             do {
                 importActivity = page.pdfFile == nil ? "Importing shared page…" : "Converting PDF on this device…"
+                if page.pdfFile == nil, let url = URL(string: page.url), AppleNews.isNewsURL(url) {
+                    let publisher = try await AppleNews.resolve(url)
+                    page.url = publisher.absoluteString
+                    page.html = nil
+                }
+                let canonical = URLCanonicalizer.canonicalize(page.url)
+                let id = ArticleID(canonicalURL: canonical)
+                if let known = await store.article(id), !known.isRetired {
+                    try await store.setLoad(id, known.read || known.load == .lock ? .lock : .load)
+                    removeQueued(page, record: file, container: container)
+                    importError = nil
+                    AppLog.post("Shared: \(known.title) is already in the list; loading it")
+                    continue
+                }
                 var article = try await article(forShared: page)
                 article.url = canonical
                 article = await ArticleImagePipeline.prepare(article)
-                try? await store.remove(id)  // a retired entry would block the add
-                try await store.add(article, load: .load)
+                let stored = try await store.addShared(article)
                 removeQueued(page, record: file, container: container)
                 importError = nil
-                AppLog.post("Shared: stored \(article.title) [\(article.source)]")
+                AppLog.post("Shared: stored \(stored.title) [\(stored.source)]")
             } catch {
                 page.attempts += 1
                 importError = "Could not import \(page.title ?? "shared document"): \(error.localizedDescription)"
                 AppLog.post("Shared: \(URL(string: page.url)?.host ?? "page") could not be read (try \(page.attempts) of 3): \(error)")
-                if page.attempts >= 3 {
+                if error is AppleNews.Failure || page.attempts >= 3 {
                     removeQueued(page, record: file, container: container)
                 } else if let updated = try? JSONEncoder().encode(page) {
                     try? updated.write(to: file, options: .atomic)
@@ -245,7 +249,7 @@ final class SyncCoordinator: ObservableObject {
         if MediumDiscovery.isMediumHost(host) {
             return try await medium.fetchArticle(page.url)
         }
-        if host.hasSuffix("nytimes.com") {
+        if host == "nytimes.com" || host.hasSuffix(".nytimes.com") {
             return try await nyt.fetchArticle(page.url)
         }
         if url.path.contains("/p/"), let article = try? await substack.fetchPost(canonicalURL: page.url) {

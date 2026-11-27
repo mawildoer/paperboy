@@ -1,8 +1,12 @@
 import Foundation
 
-public enum PageExtractorError: Error, Equatable, Sendable, CustomStringConvertible {
+public enum PageExtractorError: LocalizedError, Equatable, Sendable, CustomStringConvertible {
     /// The page has too little running text to be an article (a home page, a login wall, a video).
     case noArticleText(words: Int)
+
+    public var errorDescription: String? {
+        "Paperboy couldn’t find the article text. If you can open the full story on the publisher’s website, share that page from Safari."
+    }
 
     public var description: String {
         switch self {

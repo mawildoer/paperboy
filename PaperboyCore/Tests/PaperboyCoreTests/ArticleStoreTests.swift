@@ -175,6 +175,47 @@ private func sample(_ n: Int, date: Date = t0) -> Article {
         #expect(LoadState.off.next == .load && LoadState.load.next == .lock && LoadState.lock.next == .off)
     }
 
+    @Test func repairsAdControlsInExistingChapterAndPreviewWithoutLosingReadingStateOrImages() async throws {
+        let directory = try makeTempDirectory("paperboy-store")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        var old = sample(1)
+        let lede = "As November comes to a close, friends ask about leftovers."
+        old.bodyXHTML = "<p><em>Advertisement</em><br/><strong>SKIP ADVERTISEMENT</strong></p><p>\(lede)</p><p><img src=\"images/figure.png\" alt=\"Plot\"/></p>"
+        let chart = try MonochromeImage.encode(ImagePipelineTests.chart(), path: "images/figure.png", preferChart: true)
+        old.images = [chart]
+        let data = try EpubBuilder.build(old)
+        try await store.add(id: old.id, url: old.url, source: old.source, title: old.title, author: old.author,
+                            date: old.date, epub: data, load: .lock, preview: "Advertisement SKIP ADVERTISEMENT " + lede)
+        try await store.setOnDevice(old.id, true)
+        try await store.bump(old.id, at: t0)
+        try await store.backfillPreviews()
+        let reopened = try ArticleStore(directory: directory)
+        let record = try #require(await reopened.article(old.id))
+        #expect(record.preview == lede)
+        #expect(record.onDevice && record.load == .lock && record.pendingBump != nil)
+        let repaired = try await reopened.epub(for: old.id)
+        let zip = try ZipReader(repaired)
+        #expect(try zip.contents(named: "OEBPS/images/figure.png") == chart.data)
+        #expect(try !String(decoding: zip.contents(named: "OEBPS/article.xhtml"), as: UTF8.self).contains("ADVERTISEMENT"))
+        #expect(record.size == repaired.count && record.crc32 == CRC32.checksum(repaired))
+        try await reopened.backfillPreviews()
+        #expect(try await reopened.epub(for: old.id) == repaired)
+    }
+
+    @Test func joinedAdLabelsAreRemovedBeforeStoringNewShares() async throws {
+        let directory = try makeTempDirectory("paperboy-store")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        var article = sample(1)
+        article.bodyXHTML = "<p>Advertisement SKIP ADVERTISEMENT The actual story.</p><blockquote><p>Advertisement</p></blockquote><p>Advertisement revenue rose.</p>"
+        let saved = try await store.addShared(article)
+        #expect(saved.preview == "The actual story. Advertisement Advertisement revenue rose.")
+        try await store.setLoad(saved.id, .lock)
+        #expect(try await store.addShared(article).load == .lock)
+        #expect(await store.all().count == 1)
+    }
+
     @Test func previewIsPlainText() {
         let text = ArticleStore.preview(ofXHTML: "<p>Tom &amp; Jerry <em>ran</em>.</p>\n<p>Then   stopped.</p>")
         #expect(text == "Tom & Jerry ran . Then stopped." || text == "Tom & Jerry ran. Then stopped.")

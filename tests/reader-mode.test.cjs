@@ -61,3 +61,23 @@ test('hidden Medium paywall templates do not hide a readable member story',()=>{
   const result=extract(`<html><head><title>Accessible member story</title></head><body><article>${prose}</article><div hidden data-testid="paywall">Become a member to read</div></body></html>`, 'https://medium.com/@ada/story-123456abcdef');
   assert.ok(result?.html);
 });
+
+test('strips unclassed ad labels, accessibility controls and semantic ad slots across publishers', () => {
+  const lede = 'As November comes to a close, friends ask what to do with their leftovers.';
+  const editorial = 'The court quoted the words “skip advertisement” in its opinion about advertising.';
+  const html = `<title>Leftovers</title><article><h1>Leftovers</h1>
+    <div><p>Advertisement</p><a href="#after-ad"><span>SKIP ADVERTISEMENT</span></a></div>
+    <p>${lede}</p><div aria-label="Advertisement"><img src="/ad.png">Offer ends soon</div>
+    <div data-ad-slot="inline"><p>Buy this now</p></div>
+    <p>${editorial.repeat(4)}</p><figure><img src="/chart.png"><figcaption>Advertising revenue by quarter</figcaption></figure></article>`;
+  for (const url of ['https://www.nytimes.com/story', 'https://example.org/story']) {
+    const result = extract(html, url);
+    const content = new JSDOM(result.html).window.document.querySelector('article');
+    assert.ok(content.textContent.trim().startsWith(lede));
+    assert.ok(content.textContent.includes(editorial));
+    assert.ok(content.textContent.includes('Advertising revenue by quarter'));
+    assert.ok(!content.textContent.includes('Offer ends soon'));
+    assert.ok(!content.textContent.includes('Buy this now'));
+    assert.equal(content.querySelectorAll('img').length, 1);
+  }
+});

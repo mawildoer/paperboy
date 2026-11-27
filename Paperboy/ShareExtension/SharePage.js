@@ -2828,6 +2828,22 @@ function paperboyReaderHTML(html, pageURL) {
   doc.querySelectorAll("base").forEach(n => n.remove());
   const base = doc.createElement("base"); base.href = pageURL; doc.head.prepend(base);
   doc.querySelectorAll('nav, aside, footer, form, button, iframe, [hidden], [aria-hidden="true"], [role="navigation"], [role="complementary"], [role="dialog"], .advertisement, .ad-container, .ad-slot, .related-posts, .related-articles, .recommended-articles, .recommended-posts, .read-next, .newsletter-signup, .subscription-widget, .cookie-banner, #comments').forEach(n => n.remove());
+  // Reader mode can flatten ad slots and accessibility links into article paragraphs.
+  doc.querySelectorAll('[aria-label="advertisement" i], [aria-roledescription="advertisement" i], [data-ad-slot], [data-ad-unit], [data-testid="ad" i], [data-testid="advertisement" i], [data-testid="ad-slot" i], ins.adsbygoogle').forEach(n => {
+    if (!n.matches('html, body, main, article')) n.remove();
+  });
+  const label = text => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const skipAd = /^(?:skip (?:this )?(?:ad|advertisement)|continue reading (?:after|below) (?:the )?advertisement)$/;
+  for (const link of doc.querySelectorAll('a[href^="#"]')) {
+    if (skipAd.test(label(link.textContent)) || skipAd.test(label(link.getAttribute('aria-label')))) link.remove();
+  }
+  // Only standalone text blocks. Preserve editorial sentences, quoted text and figures.
+  for (const block of doc.querySelectorAll('p, div, section')) {
+    if (block.childElementCount > 3 || block.closest('figure, blockquote, pre, code') ||
+        block.querySelector('img, svg, canvas, figure, p, div, section, blockquote, pre, code')) continue;
+    const text = label(block.textContent);
+    if (text === 'advertisement' || text === 'advertisement skip advertisement' || skipAd.test(text)) block.remove();
+  }
   doc.querySelectorAll("img").forEach(img => {
     const lazy = img.getAttribute("data-src") || img.getAttribute("data-lazy-src");
     if (lazy) img.setAttribute("src", lazy);
