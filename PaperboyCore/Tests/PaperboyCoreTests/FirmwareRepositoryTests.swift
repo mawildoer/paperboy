@@ -61,6 +61,31 @@ private final class FirmwareURLProtocol: URLProtocol, @unchecked Sendable {
         await #expect(throws: URLError.self) { try await relaunched.latestMetadata(now: date, force: true) }
     }
 
+    @Test func offlineRefreshOffersOnlyAnAlreadyVerifiedUpgrade() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repository = FirmwareRepository(directory: dir, session: session())
+        FirmwareURLProtocol.configure(responses())
+        let release = try await repository.latestMetadata()
+        // Lose internet before the binary arrives. Metadata alone cannot authorize an offline update.
+        FirmwareURLProtocol.configure([:])
+        await #expect(throws: URLError.self) { try await repository.image(for: release) }
+        await #expect(throws: URLError.self) { try await repository.latestMetadata(force: true, installedVersion: "0.3.0-paperboy") }
+        FirmwareURLProtocol.configure([imageURL: image])
+        #expect(try await repository.image(for: release) == image)
+
+        FirmwareURLProtocol.configure([:])
+        let relaunched = FirmwareRepository(directory: dir, session: session())
+        let expired = Date().addingTimeInterval(FirmwareUpdatePolicy.checkInterval + 1)
+        #expect(try await relaunched.latestMetadata(now: expired, installedVersion: "0.3.0-paperboy") == release)
+        #expect(try await relaunched.image(for: release) == image)
+        #expect(FirmwareURLProtocol.requestCount == 1)
+        await #expect(throws: URLError.self) { try await relaunched.latestMetadata(now: expired, installedVersion: release.version) }
+        let path = dir.appendingPathComponent("firmware-\(release.digest).bin")
+        try Data(repeating: 0, count: image.count).write(to: path)
+        await #expect(throws: URLError.self) { try await relaunched.latestMetadata(now: expired, installedVersion: "0.3.0-paperboy") }
+    }
+
     @Test func damagedCachedImageIsDownloadedAndCheckedAgain() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -100,6 +125,26 @@ private final class FirmwareURLProtocol: URLProtocol, @unchecked Sendable {
         #expect(FirmwareURLProtocol.requestCount == 2)
     }
 
+    @Test func interruptedFirmwareDownloadsAreDeferredWithoutExposingURLSessionDiagnostics() throws {
+        let cancelled = NSError(domain: NSURLErrorDomain, code: -999, userInfo: [
+            NSURLErrorFailingURLStringErrorKey: imageURL, NSLocalizedDescriptionKey: "cancelled"
+        ])
+        for error: Error in [cancelled, CancellationError(), SyncError.cancelled] {
+            let interruption = try #require(FirmwareInterruption(error))
+            #expect(interruption == .cancelled)
+            #expect(interruption.message(automatic: true) == nil)
+            #expect(interruption.message(automatic: false)?.contains("Tap Update") == true)
+        }
+        for code: URLError.Code in [.notConnectedToInternet, .networkConnectionLost, .timedOut, .dnsLookupFailed] {
+            let interruption = try #require(FirmwareInterruption(URLError(code)))
+            #expect(interruption == .connection)
+            #expect(interruption.message(automatic: true)?.contains("later sync") == true)
+        }
+        #expect(FirmwareInterruption(URLError(.serverCertificateUntrusted)) == nil)
+        #expect(FirmwareInterruption(SyncError.dataSource("checksum mismatch")) == nil)
+        #expect(FirmwareInterruption(NSError(domain: NSPOSIXErrorDomain, code: -999)) == nil)
+    }
+
     @Test func automaticPolicyDoesNotDowngradeOrReplaceUnknownDevelopmentBuilds() {
         #expect(FirmwareUpdatePolicy.isUpgrade("0.3.10-paperboy", from: "0.3.9-paperboy"))
         #expect(!FirmwareUpdatePolicy.isUpgrade("0.3.1-paperboy", from: "0.3.1-paperboy"))
@@ -112,6 +157,8 @@ private final class FirmwareURLProtocol: URLProtocol, @unchecked Sendable {
         #expect(!FirmwareUpdatePolicy.attemptDue(lastAttempt: date, now: date.addingTimeInterval(59 * 60)))
         #expect(FirmwareUpdatePolicy.attemptDue(lastAttempt: date, now: date.addingTimeInterval(60 * 60)))
         #expect(FirmwareUpdatePolicy.attemptDue(lastAttempt: date, now: date.addingTimeInterval(-60)))
+        #expect(!FirmwareUpdatePolicy.attemptDue(lastAttempt: date, now: date.addingTimeInterval(59), afterInterruption: true))
+        #expect(FirmwareUpdatePolicy.attemptDue(lastAttempt: date, now: date.addingTimeInterval(60), afterInterruption: true))
         #expect(!FirmwareUpdatePolicy.attemptDue(lastAttempt: date, now: date.addingTimeInterval(59), hasPartialTransfer: true))
         #expect(FirmwareUpdatePolicy.attemptDue(lastAttempt: date, now: date.addingTimeInterval(60), hasPartialTransfer: true))
     }

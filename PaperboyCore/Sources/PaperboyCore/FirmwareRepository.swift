@@ -1,13 +1,44 @@
 import CryptoKit
 import Foundation
 
+public enum FirmwareInterruption: Equatable, Sendable {
+    case cancelled
+    case connection
+
+    public init?(_ error: Error) {
+        if error is CancellationError || (error as? SyncError) == .cancelled {
+            self = .cancelled
+            return
+        }
+        let ns = error as NSError
+        guard ns.domain == NSURLErrorDomain else { return nil }
+        switch URLError.Code(rawValue: ns.code) {
+        case .cancelled: self = .cancelled
+        case .notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotFindHost,
+             .dnsLookupFailed, .cannotConnectToHost, .dataNotAllowed, .internationalRoamingOff,
+             .callIsActive: self = .connection
+        default: return nil
+        }
+    }
+
+    public func message(automatic: Bool) -> String? {
+        switch self {
+        case .cancelled:
+            return automatic ? nil : "Firmware update paused. Tap Update to try again."
+        case .connection:
+            return automatic ? "Waiting for internet. Paperboy will try again at a later sync."
+                : "Couldn’t reach the firmware server. Check your connection and tap Update to try again."
+        }
+    }
+}
+
 public enum FirmwareUpdatePolicy {
     public static let checkInterval: TimeInterval = 6 * 60 * 60
     public static let retryInterval: TimeInterval = 60 * 60
 
-    public static func attemptDue(lastAttempt: Date?, now: Date = Date(), hasPartialTransfer: Bool = false) -> Bool {
+    public static func attemptDue(lastAttempt: Date?, now: Date = Date(), hasPartialTransfer: Bool = false, afterInterruption: Bool = false) -> Bool {
         guard let lastAttempt else { return true }
-        return now < lastAttempt || now.timeIntervalSince(lastAttempt) >= (hasPartialTransfer ? 60 : retryInterval)
+        return now < lastAttempt || now.timeIntervalSince(lastAttempt) >= (hasPartialTransfer || afterInterruption ? 60 : retryInterval)
     }
 
     /// Automatic updates only advance a recognized stable Paperboy version.
@@ -58,15 +89,40 @@ public actor FirmwareRepository {
         self.session = session
     }
 
-    public func latestMetadata(now: Date = Date(), force: Bool = false) async throws -> FirmwareReleaseInfo {
+    public func latestMetadata(now: Date = Date(), force: Bool = false, installedVersion: String? = nil) async throws -> FirmwareReleaseInfo {
         let metadataURL = directory.appendingPathComponent("release.json")
-        if !force,
-           let size = try? metadataURL.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 200_000,
-           let data = try? Data(contentsOf: metadataURL),
-           let cached = try? JSONDecoder().decode(CachedMetadata.self, from: data), cached.release.valid,
-           now >= cached.checked, now.timeIntervalSince(cached.checked) < FirmwareUpdatePolicy.checkInterval {
+        let cached = cachedMetadata(at: metadataURL)
+        if !force, let cached, now >= cached.checked, now.timeIntervalSince(cached.checked) < FirmwareUpdatePolicy.checkInterval {
             return cached.release
         }
+
+        let info: FirmwareReleaseInfo
+        do {
+            info = try await fetchMetadata()
+        } catch {
+            try Task.checkCancellation()
+            // An offline cache can establish an available upgrade, never that the reader is current.
+            guard FirmwareInterruption(error) == .connection, let cached, let installedVersion,
+                  FirmwareUpdatePolicy.isUpgrade(cached.release.version, from: installedVersion),
+                  cachedImage(for: cached.release) != nil else { throw error }
+            return cached.release
+        }
+        try Task.checkCancellation()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(CachedMetadata(checked: now, release: info)) {
+            try? data.write(to: metadataURL, options: .atomic)
+        }
+        return info
+    }
+
+    private func cachedMetadata(at url: URL) -> CachedMetadata? {
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 200_000,
+              let data = try? Data(contentsOf: url),
+              let cached = try? JSONDecoder().decode(CachedMetadata.self, from: data), cached.release.valid else { return nil }
+        return cached
+    }
+
+    private func fetchMetadata() async throws -> FirmwareReleaseInfo {
         struct Asset: Decodable { let name: String; let browser_download_url: URL }
         struct Release: Decodable { let tag_name: String; let assets: [Asset] }
         let api = URL(string: "https://api.github.com/repos/mawildoer/crosspoint-reader/releases/latest")!
@@ -80,19 +136,13 @@ public actor FirmwareRepository {
               let digest = line.split(whereSeparator: \.isWhitespace).first else { throw URLError(.cannotParseResponse) }
         let info = FirmwareReleaseInfo(version: version, digest: digest.lowercased(), imageURL: binary.browser_download_url)
         guard info.valid else { throw URLError(.cannotParseResponse) }
-        try Task.checkCancellation()
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(CachedMetadata(checked: now, release: info)) {
-            try? data.write(to: metadataURL, options: .atomic)
-        }
         return info
     }
 
     public func image(for release: FirmwareReleaseInfo) async throws -> Data {
         guard release.valid else { throw URLError(.cannotParseResponse) }
         let url = directory.appendingPathComponent("firmware-\(release.digest).bin")
-        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= FirmwareUpdateSession.maximumBytes,
-           let data = try? Data(contentsOf: url, options: .mappedIfSafe), validImage(data, release: release) { return data }
+        if let cached = cachedImage(for: release) { return cached }
         let data = try await download(release.imageURL, maximum: FirmwareUpdateSession.maximumBytes)
         guard validImage(data, release: release) else { throw SyncError.dataSource("downloaded firmware checksum or image is invalid") }
         try Task.checkCancellation()
@@ -102,6 +152,14 @@ public actor FirmwareRepository {
             where file.lastPathComponent.hasPrefix("firmware-") && file.pathExtension == "bin" && file.lastPathComponent != url.lastPathComponent {
             try? FileManager.default.removeItem(at: file)
         }
+        return data
+    }
+
+    private func cachedImage(for release: FirmwareReleaseInfo) -> Data? {
+        let url = directory.appendingPathComponent("firmware-\(release.digest).bin")
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              (256...FirmwareUpdateSession.maximumBytes).contains(size),
+              let data = try? Data(contentsOf: url, options: .mappedIfSafe), validImage(data, release: release) else { return nil }
         return data
     }
 

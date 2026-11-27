@@ -24,6 +24,7 @@ final class SyncCoordinator: ObservableObject {
     private static let firmwareAttemptKey = "paperboy.firmwareAttempt.v1"
     private static let firmwarePartialKey = "paperboy.firmwarePartial.v1"
     private static let firmwareStagedKey = "paperboy.firmwareStaged.v1"
+    private static let firmwareDeferredKey = "paperboy.firmwareDeferred.v1"
     private static let firmwareFailedKey = "paperboy.firmwareFailed.v1"
 
     @Published var settings: AppSettings {
@@ -507,13 +508,14 @@ final class SyncCoordinator: ObservableObject {
     private func maybeAutomaticallyUpdateFirmware() async {
         let partial = UserDefaults.standard.bool(forKey: Self.firmwarePartialKey)
         let staged = UserDefaults.standard.bool(forKey: Self.firmwareStagedKey)
-        let partialRetry = partial && !UserDefaults.standard.bool(forKey: Self.firmwareFailedKey)
+        let deferred = UserDefaults.standard.bool(forKey: Self.firmwareDeferredKey)
+        let partialRetry = partial && !deferred && !UserDefaults.standard.bool(forKey: Self.firmwareFailedKey)
         guard settings.automaticallyUpdateFirmware,
               hasLongFirmwareWindow || ((deviceProtocolVersion ?? 0) >= 3 && !staged),
               lastSessionSucceeded, !Task.isCancelled, syncTask == nil, firmwareTask == nil, pendingFirmwareVersion == nil,
               case .connected = bluetooth.state,
               (partialRetry && hasLongFirmwareWindow) || FirmwareUpdatePolicy.attemptDue(
-                lastAttempt: UserDefaults.standard.object(forKey: Self.firmwareAttemptKey) as? Date, hasPartialTransfer: partialRetry)
+                lastAttempt: UserDefaults.standard.object(forKey: Self.firmwareAttemptKey) as? Date, hasPartialTransfer: partialRetry, afterInterruption: deferred)
         else { return }
         updateFirmware(automatic: true)
         await firmwareTask?.value
@@ -556,6 +558,7 @@ final class SyncCoordinator: ObservableObject {
             defer { UIApplication.shared.isIdleTimerDisabled = priorIdleTimer }
             #endif
             await oldSync?.value
+            var startedTransfer = false
             do {
                 try Task.checkCancellation()
                 guard let repository = self.firmwareRepository else { throw SyncError.dataSource("firmware cache is unavailable") }
@@ -570,14 +573,14 @@ final class SyncCoordinator: ObservableObject {
                     version = "0.2.0-paperboy"
                     image = try Data(contentsOf: file)
                 } else {
-                    let release = try await repository.latestMetadata(force: !automatic)
+                    let release = try await repository.latestMetadata(force: !automatic, installedVersion: self.device.firmware)
                     guard self.shouldInstall(release.version, automatic: automatic) else { return }
                     version = release.version
                     self.firmwareActivity = "Preparing firmware…"
                     image = try await repository.image(for: release)
                 }
                 #else
-                let release = try await repository.latestMetadata(force: !automatic)
+                let release = try await repository.latestMetadata(force: !automatic, installedVersion: self.device.firmware)
                 guard self.shouldInstall(release.version, automatic: automatic) else { return }
                 version = release.version
                 self.firmwareActivity = "Preparing firmware…"
@@ -593,10 +596,12 @@ final class SyncCoordinator: ObservableObject {
                         }
                     }
                 }
+                startedTransfer = true
                 let result = try await transfer.transfer(image, targetVersion: version,
                     maximumTransferBytes: self.hasLongFirmwareWindow ? nil : 256 * 1024, willCommit: { [weak self] previous in
                     try await self?.rememberFirmwareCommit(version: version, previous: previous)
                 })
+                UserDefaults.standard.removeObject(forKey: Self.firmwareDeferredKey)
                 switch result {
                 case .current:
                     self.clearFirmwarePartial()
@@ -617,6 +622,7 @@ final class SyncCoordinator: ObservableObject {
                 }
             } catch let rejection as FirmwareCommitRejection {
                 self.clearPendingFirmware()
+                UserDefaults.standard.removeObject(forKey: Self.firmwareDeferredKey)
                 UserDefaults.standard.set(true, forKey: Self.firmwareFailedKey)
                 self.firmwareActivity = nil
                 self.firmwareError = rejection.description
@@ -625,16 +631,21 @@ final class SyncCoordinator: ObservableObject {
                 // A commit may have reached the reader even if its acknowledgement was lost.
                 self.firmwareActivity = "Waiting for the reader to confirm its firmware update…"
                 AppLog.post("Firmware commit needs verification: \(error)")
-            } catch is CancellationError {
-                if (self.deviceProtocolVersion ?? 0) >= 3 {
-                    UserDefaults.standard.set(true, forKey: Self.firmwarePartialKey)
-                }
-                self.firmwareActivity = nil
-                AppLog.post("Firmware work deferred; it will retry at a later sync")
             } catch {
+                if let interruption = FirmwareInterruption(error) {
+                    if startedTransfer, (self.deviceProtocolVersion ?? 0) >= 3 {
+                        UserDefaults.standard.set(true, forKey: Self.firmwarePartialKey)
+                    }
+                    UserDefaults.standard.set(Date(), forKey: Self.firmwareAttemptKey)
+                    UserDefaults.standard.set(true, forKey: Self.firmwareDeferredKey)
+                    self.firmwareActivity = interruption.message(automatic: automatic)
+                    AppLog.post("Firmware work deferred: \(error)")
+                    return
+                }
+                UserDefaults.standard.removeObject(forKey: Self.firmwareDeferredKey)
                 UserDefaults.standard.set(true, forKey: Self.firmwareFailedKey)
                 self.firmwareActivity = nil
-                self.firmwareError = String(describing: error)
+                self.firmwareError = (error as? SyncError)?.description ?? error.localizedDescription
                 AppLog.post("Firmware update failed: \(error)")
             }
         }
@@ -664,6 +675,7 @@ final class SyncCoordinator: ObservableObject {
     }
 
     private func clearFirmwarePartial() {
+        UserDefaults.standard.removeObject(forKey: Self.firmwareDeferredKey)
         UserDefaults.standard.removeObject(forKey: Self.firmwarePartialKey)
         UserDefaults.standard.removeObject(forKey: Self.firmwareStagedKey)
         UserDefaults.standard.removeObject(forKey: Self.firmwareFailedKey)
@@ -718,7 +730,7 @@ final class SyncCoordinator: ObservableObject {
             } catch {
                 self.clearPendingFirmware()
                 self.firmwareActivity = nil
-                self.firmwareError = String(describing: error)
+                self.firmwareError = (error as? SyncError)?.description ?? error.localizedDescription
                 AppLog.post("Firmware verification failed: \(error)")
             }
         }
