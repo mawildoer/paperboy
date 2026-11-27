@@ -1,12 +1,12 @@
 import Foundation
 
-/// Paperboy Bluetooth protocol, version 2. See docs/bluetooth-protocol.md.
+/// Paperboy Bluetooth protocol, version 3. See docs/bluetooth-protocol.md.
 ///
 /// Each GATT write (phone → device, RX characteristic) or notification (device → phone, TX
 /// characteristic) carries exactly one frame: one type byte followed by the payload.
 /// All integers are little-endian.
 public enum SyncProtocol {
-    public static let version: UInt8 = 2
+    public static let version: UInt8 = 3
 
     public static let serviceUUID = "8E400001-7B2A-4B1F-9C5D-5A1EF0C0DE01"
     /// Phone → device. Write and write-without-response, encrypted.

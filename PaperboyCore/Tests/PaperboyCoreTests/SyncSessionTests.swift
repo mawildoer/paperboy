@@ -83,6 +83,17 @@ private func enc(_ frame: Frame) -> Data {
 }
 
 @Suite struct SyncSessionTests {
+    @Test func versionTwoReaderStillAcceptsArticleSync() async throws {
+        let items = try demoItems()
+        let device = FakeDevice()
+        device.setProtocolVersion(2)
+        let source = StaticSyncSource(items: items)
+        let report = await SyncSession(transport: FakeDeviceTransport(device: device), source: source, config: fastConfig()).run()
+        #expect(report.completed)
+        #expect(report.device?.version == 2)
+        #expect(report.uploaded == items.map(\.item.id))
+    }
+
     @Test func fullSessionAgainstAnEmptyDevice() async throws {
         let items = try demoItems()
         let device = FakeDevice()

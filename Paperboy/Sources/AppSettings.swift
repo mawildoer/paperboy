@@ -36,6 +36,7 @@ struct AppSettings: Codable, Equatable, Sendable {
 
     /// Longest the connect-time fetch may take before the sync session starts.
     var connectFetchSeconds = 5.0
+    var automaticallyUpdateFirmware = true
 
     var retention: RetentionPolicy {
         RetentionPolicy(unreadDays: unreadDays, readDays: readDays)
@@ -81,6 +82,7 @@ struct AppSettings: Codable, Equatable, Sendable {
         unreadDays = try c.decodeIfPresent(Double.self, forKey: .unreadDays) ?? d.unreadDays
         readDays = try c.decodeIfPresent(Double.self, forKey: .readDays) ?? d.readDays
         connectFetchSeconds = try c.decodeIfPresent(Double.self, forKey: .connectFetchSeconds) ?? d.connectFetchSeconds
+        automaticallyUpdateFirmware = try c.decodeIfPresent(Bool.self, forKey: .automaticallyUpdateFirmware) ?? d.automaticallyUpdateFirmware
     }
 }
 

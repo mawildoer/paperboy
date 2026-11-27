@@ -7,17 +7,19 @@ private actor FirmwareTransport: SyncTransport {
     let stagedStatus: UInt8
     let readyStatus: UInt8
     let badProgress: Bool
+    let cancelWhenStaged: Bool
     var received = Data()
     var replies: [Data] = []
     var committed = false
     var aborted = false
     var lastProgress = 0
 
-    init(image: Data, stagedStatus: UInt8 = 0, readyStatus: UInt8 = 0, badProgress: Bool = false) {
+    init(image: Data, stagedStatus: UInt8 = 0, readyStatus: UInt8 = 0, badProgress: Bool = false, cancelWhenStaged: Bool = false) {
         self.image = image
         self.stagedStatus = stagedStatus
         self.readyStatus = readyStatus
         self.badProgress = badProgress
+        self.cancelWhenStaged = cancelWhenStaged
     }
     func maxWriteLength(withResponse: Bool) -> Int { 185 }
     func send(_ frame: Data, withResponse: Bool) throws {
@@ -35,7 +37,9 @@ private actor FirmwareTransport: SyncTransport {
                 replies.append(progress)
                 lastProgress = received.count
             }
-        case 0x42: replies.append(Data([0xC2, stagedStatus]))
+        case 0x42:
+            replies.append(Data([0xC2, stagedStatus]))
+            if cancelWhenStaged { withUnsafeCurrentTask { $0?.cancel() } }
         case 0x43: committed = true; replies.append(Data([0xC3, 0]))
         case 0x44: aborted = true
         default: Issue.record("Unexpected frame")
@@ -93,5 +97,32 @@ private actor FirmwareTransport: SyncTransport {
         await #expect(throws: SyncError.self) { try await FirmwareUpdateSession(transport: link).install(Self.image) }
         #expect(await !link.committed)
         #expect(await link.aborted)
+    }
+
+    @Test func backgroundExpirationAfterStagingDoesNotCommit() async {
+        let link = FirmwareTransport(image: Self.image, cancelWhenStaged: true)
+        let work = Task { try await FirmwareUpdateSession(transport: link).install(Self.image) }
+        await #expect(throws: CancellationError.self) { try await work.value }
+        #expect(await !link.committed)
+        #expect(await link.aborted)
+    }
+
+    @Test func canceledWorkNeverStartsATransfer() async {
+        let link = FirmwareTransport(image: Self.image)
+        let work = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await FirmwareUpdateSession(transport: link).install(Self.image)
+        }
+        await #expect(throws: CancellationError.self) { try await work.value }
+        #expect(await link.received.isEmpty)
+        #expect(await !link.committed)
+    }
+
+    @Test func legacyReaderWaitsForALongerWindowInsteadOfStartingAnUnresumableUpload() async throws {
+        let link = FirmwareTransport(image: Self.image)
+        #expect(try await FirmwareUpdateSession(transport: link).transfer(Self.image, maximumTransferBytes: 4096) == .paused(bytes: 0))
+        #expect(await link.received.isEmpty)
+        #expect(await !link.committed)
+        #expect(await !link.aborted)
     }
 }

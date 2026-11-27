@@ -68,13 +68,12 @@ struct SettingsView: View {
                     Text("RSS feeds from rss.nytimes.com, or section page addresses.")
                 }
 
-                Section("Reader firmware") {
-                    if let version = coordinator.device.firmware { LabeledContent("Installed", value: version) }
-                    if let activity = coordinator.firmwareActivity { Text(activity) }
-                    if let error = coordinator.firmwareError { Text(error).foregroundStyle(.red) }
-                    Button("Update reader over Bluetooth") { coordinator.updateFirmware() }
-                        .disabled(coordinator.firmwareUpdating)
-                    Text("Keep the reader in Library and connected to USB, or charged above 30%. The reader restarts after installation. The first update adding Bluetooth support must be installed over USB.").font(.footnote).foregroundStyle(.secondary)
+                Section {
+                    Toggle("Automatically update", isOn: $coordinator.settings.automaticallyUpdateFirmware)
+                } header: {
+                    Text("Reader firmware")
+                } footer: {
+                    Text("Prepare reader updates after syncing articles. Supported readers keep partial transfers for the next sync; installation waits for a longer window. Keep the reader in Library and powered or above 30% battery. It restarts after updating. You can also use Update beside the firmware version on the main page.")
                 }
 
                 Section {

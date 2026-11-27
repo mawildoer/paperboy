@@ -152,7 +152,7 @@ public struct SyncSession: Sendable {
             return nil
         }
         report.device = ack
-        guard ack.version == SyncProtocol.version || ack.version == 1 else { throw SyncError.versionMismatch(device: ack.version) }
+        guard (1...SyncProtocol.version).contains(ack.version) else { throw SyncError.versionMismatch(device: ack.version) }
 
         // LIST
         try await send(.list)

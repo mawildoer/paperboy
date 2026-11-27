@@ -138,3 +138,56 @@ On the phone, install TestFlight build 107.1, then use **Settings → Update rea
 over Bluetooth** with the reader in Library and USB-powered or above 30% battery.
 After reboot, confirm Paperboy reports `0.3.0-paperboy`, then check Bump order,
 partially read article resume, and the three Library views and sleep artwork.
+
+## Automatic and resumable firmware updates
+
+The main page places Update beside the installed firmware version. Settings has
+Automatically update, enabled by default and decoded safely from older settings.
+Firmware work waits for article sync instead of cancelling it. Stable releases
+are compared numerically; automatic work never downgrades or replaces an unknown
+development build. Metadata is cached for six hours and the verified image is
+cached across launches, so repeat syncs do not redownload it. Normal failures back
+off for an hour; partial transfers can continue at a later sync after a one-minute
+minimum interval. A long window may continue a partial transfer immediately;
+failed attempts retain the hourly backoff even if a partial stage exists.
+
+The existing refresh and processing jobs are reused. iOS chooses when background
+jobs run; short windows stage at most 256 KiB on protocol 3 readers, then pause.
+The complete actual file is validated and committed only in a foreground or
+processing window. Processing tasks run after article work and handle expiration;
+Bluetooth restoration can continue staging at later connections. Turning the
+option off cancels automatic work before commit. A commit already in progress
+still finishes and is verified. See Apple's [background-task guidance](https://developer.apple.com/documentation/backgroundtasks/bgprocessingtask).
+
+Protocol 3 reader firmware stores a checked image identity, offset and prefix CRC
+on SD. Resume and pause acknowledgments are verified against the phone's image;
+the reader rereads the full actual SD file before commit. Pending confirmation is
+written atomically to the app's support directory before the commit command;
+failure to save prevents commit. Relaunch/reconnect verifies the expected changed
+version rather than treating acceptance or a disconnect as success. The first
+upgrade from older Bluetooth firmware needs a complete window to add resume
+support; no new USB bootstrap is required.
+
+Explicit commit rejections clear pending confirmation and release maintenance;
+only ambiguous commit delivery keeps the record. Pause also releases a validated
+stage after cancellation or a failed confirmation-record write. Host checks run
+the real receiver handlers and verify immediate article transfer after such a
+pause, preserved offsets after final-checkpoint short writes/rename failures,
+and low-battery commit rejection followed by resume and a later accepted commit.
+
+The larger, upright Paperboy mark and dark text on white are in firmware 0.3.1
+and carried forward in 0.4.0. The logo remains in flash (18,432 bytes) at the
+human's discretion; it adds no bitmap-buffer RAM allocation or SD dependency.
+
+Local validation for this change: 170 shared Swift tests, Release iOS app and
+extension, Mac CLI, share/document registration, and actual settings-decoder
+migration/disabled-state persistence checks passed. The actual firmware receiver
+host checks pass across checkpoint failures and recovery into article sync.
+Four independent reviews and one targeted follow-up covered both sides of the
+wire contract. Pause/validated-state handling, preservation after final metadata
+write failure, and definitive commit rejection findings were resolved; no verified
+finding remains. The new repository was also exercised against the live 0.3.1
+GitHub release and its disk cache, with verified image integrity.
+TestFlight delivery and the 0.4.0 firmware release are checked separately before
+reporting availability. Physical interruption/resume and display checks remain
+human device checks; no USB app install or reader flash is part of this update.

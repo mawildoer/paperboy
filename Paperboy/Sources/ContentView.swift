@@ -83,8 +83,14 @@ struct ContentView: View {
             if let free = coordinator.device.freeSpaceMB {
                 LabeledContent("Free space", value: free >= 1024 ? String(format: "%.1f GB", Double(free) / 1024) : "\(free) MB")
             }
-            if let firmware = coordinator.device.firmware, !firmware.isEmpty {
-                LabeledContent("Firmware", value: firmware)
+            LabeledContent("Firmware") {
+                HStack {
+                    Text(coordinator.device.firmware ?? "Unknown")
+                    Button("Update") { coordinator.updateFirmware() }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Update reader firmware")
+                        .disabled(!isConnected || coordinator.firmwareUpdating)
+                }
             }
             Button {
                 coordinator.syncNow()
@@ -98,7 +104,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .disabled(coordinator.activity != nil)
+            .disabled(coordinator.activity != nil || coordinator.firmwareUpdating)
         }
     }
 

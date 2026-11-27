@@ -21,9 +21,23 @@ final class SyncCoordinator: ObservableObject {
     static let refreshTaskIdentifier = "local.paperboy.refresh"
     static let processingTaskIdentifier = "local.paperboy.processing"
     private static let statusKey = "paperboy.deviceStatus.v1"
+    private static let firmwareAttemptKey = "paperboy.firmwareAttempt.v1"
+    private static let firmwarePartialKey = "paperboy.firmwarePartial.v1"
+    private static let firmwareStagedKey = "paperboy.firmwareStaged.v1"
+    private static let firmwareFailedKey = "paperboy.firmwareFailed.v1"
 
     @Published var settings: AppSettings {
-        didSet { if settings != oldValue { settings.save() } }
+        didSet {
+            if settings != oldValue { settings.save() }
+            if oldValue.automaticallyUpdateFirmware, !settings.automaticallyUpdateFirmware,
+               firmwareIsAutomatic, pendingFirmwareVersion == nil { firmwareTask?.cancel() }
+            if !oldValue.automaticallyUpdateFirmware, settings.automaticallyUpdateFirmware {
+                #if os(iOS)
+                scheduleBackgroundTasks()
+                #endif
+                Task { self.readerConnected() }
+            }
+        }
     }
     @Published private(set) var articles: [StoredArticle] = []
     @Published private(set) var device = DeviceStatus()
@@ -45,8 +59,15 @@ final class SyncCoordinator: ObservableObject {
     private var store: ArticleStore?
     private var fetchTask: Task<FetchSummary, Never>?
     private var syncTask: Task<Void, Never>?
+    private var lastSessionSucceeded = false
+    private var deviceProtocolVersion: UInt8?
     private var validationAttempted = false
     private var firmwareTask: Task<Void, Never>?
+    private var firmwareRepository: FirmwareRepository?
+    private var firmwarePendingURL: URL?
+    private var firmwareReconnectPending = false
+    private var firmwareIsAutomatic = false
+    private var processingBackgroundTasks = 0
     private var pendingFirmwareVersion: String?
     private var pendingFirmwarePrevious: String?
     private var firmwareTimeout: Task<Void, Never>?
@@ -58,6 +79,8 @@ final class SyncCoordinator: ObservableObject {
         do {
             let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             store = try ArticleStore(directory: base.appendingPathComponent("Articles", isDirectory: true))
+            firmwareRepository = FirmwareRepository(directory: base.appendingPathComponent("Firmware", isDirectory: true))
+            firmwarePendingURL = base.appendingPathComponent("Firmware/pending-install.json")
         } catch {
             startupError = "Could not open the article library: \(error.localizedDescription)"
         }
@@ -67,6 +90,15 @@ final class SyncCoordinator: ObservableObject {
         }
         #endif
         bluetooth.onReady = { [weak self] in self?.readerConnected(reconnected: true) }
+        if let url = firmwarePendingURL, let data = try? Data(contentsOf: url),
+           let pending = try? JSONDecoder().decode([String: String].self, from: data),
+           let version = pending["version"], let previous = pending["previous"] {
+            pendingFirmwareVersion = version
+            pendingFirmwarePrevious = previous
+            firmwareUpdating = true
+            firmwareActivity = "Waiting for the reader to confirm its firmware update…"
+            armFirmwareTimeout()
+        }
     }
 
     /// One instance for the whole process. It is created at launch, not when the first view
@@ -92,6 +124,7 @@ final class SyncCoordinator: ObservableObject {
             if ProcessInfo.processInfo.arguments.contains("--paperboy-firmware-validation") { return }
             #endif
             _ = await fetch(reason: "app open", includeWebSources: true, limitSeconds: 600)
+            if case .connected = bluetooth.state { readerConnected() }
         }
     }
 
@@ -265,11 +298,12 @@ final class SyncCoordinator: ObservableObject {
             do { try await Task.sleep(for: .seconds(1)) } catch { return }
             guard let self else { return }
             await self.syncTask?.value
-            guard !Task.isCancelled, self.syncTask == nil, !self.firmwareUpdating,
+            guard !Task.isCancelled, self.syncTask == nil, !self.firmwareUpdating, self.pendingFirmwareVersion == nil,
                   case .connected = self.bluetooth.state else { return }
             self.syncTask = Task { [weak self] in
                 await self?.runSession()
                 self?.syncTask = nil
+                if !Task.isCancelled { await self?.maybeAutomaticallyUpdateFirmware() }
             }
         }
     }
@@ -370,8 +404,9 @@ final class SyncCoordinator: ObservableObject {
 
     /// The reader just connected: a short fetch of anything new, then the session.
     private func readerConnected(reconnected: Bool = false) {
+        guard case .connected = bluetooth.state else { return }
         if pendingFirmwareVersion != nil {
-            if reconnected { verifyFirmwareAfterReboot() }
+            if reconnected { firmwareReconnectPending = true; verifyFirmwareAfterReboot() }
             return
         }
         #if DEBUG
@@ -387,6 +422,7 @@ final class SyncCoordinator: ObservableObject {
         syncTask = Task { [weak self] in
             await self?.fetchThenSync()
             self?.syncTask = nil
+            if !Task.isCancelled { await self?.maybeAutomaticallyUpdateFirmware() }
         }
     }
 
@@ -424,6 +460,7 @@ final class SyncCoordinator: ObservableObject {
     }
 
     private func runSession() async {
+        lastSessionSucceeded = false
         guard let store else { return }
         activity = "Syncing with the reader…"
         defer { activity = nil }
@@ -432,6 +469,7 @@ final class SyncCoordinator: ObservableObject {
         let report = await session.run()
 
         if let info = report.device {
+            deviceProtocolVersion = info.version
             device.batteryPercent = Int(info.batteryPercent)
             // 0xFFFFFFFF: the reader has not measured its card yet (DESIGN.md).
             device.freeSpaceMB = info.freeSpaceMB == UInt32.max ? nil : Int(info.freeSpaceMB)
@@ -446,6 +484,7 @@ final class SyncCoordinator: ObservableObject {
         if let error = report.error {
             parts.append("stopped: \(error)")
         } else {
+            lastSessionSucceeded = true
             device.lastSync = Date()
             if parts.isEmpty { parts.append("up to date") }
         }
@@ -457,7 +496,34 @@ final class SyncCoordinator: ObservableObject {
 
     // MARK: Firmware updates
 
-    func updateFirmware(validation: Bool = false) {
+    private var hasLongFirmwareWindow: Bool {
+        #if os(iOS)
+        return processingBackgroundTasks > 0 || UIApplication.shared.applicationState == .active
+        #else
+        return true
+        #endif
+    }
+
+    private func maybeAutomaticallyUpdateFirmware() async {
+        let partial = UserDefaults.standard.bool(forKey: Self.firmwarePartialKey)
+        let staged = UserDefaults.standard.bool(forKey: Self.firmwareStagedKey)
+        let partialRetry = partial && !UserDefaults.standard.bool(forKey: Self.firmwareFailedKey)
+        guard settings.automaticallyUpdateFirmware,
+              hasLongFirmwareWindow || ((deviceProtocolVersion ?? 0) >= 3 && !staged),
+              lastSessionSucceeded, !Task.isCancelled, syncTask == nil, firmwareTask == nil, pendingFirmwareVersion == nil,
+              case .connected = bluetooth.state,
+              (partialRetry && hasLongFirmwareWindow) || FirmwareUpdatePolicy.attemptDue(
+                lastAttempt: UserDefaults.standard.object(forKey: Self.firmwareAttemptKey) as? Date, hasPartialTransfer: partialRetry)
+        else { return }
+        updateFirmware(automatic: true)
+        await firmwareTask?.value
+    }
+
+    func updateFirmware(validation: Bool = false, automatic: Bool = false) {
+        if pendingFirmwareVersion != nil {
+            if case .connected = bluetooth.state { verifyFirmwareAfterReboot() }
+            return
+        }
         guard firmwareTask == nil, pendingFirmwareVersion == nil else { return }
         guard case .connected = bluetooth.state else {
             firmwareError = "Connect to the reader in its Library before updating firmware."
@@ -465,55 +531,108 @@ final class SyncCoordinator: ObservableObject {
         }
         firmwareError = nil
         firmwareUpdating = true
-        cancelFetch()
+        firmwareIsAutomatic = automatic
+        if automatic { UserDefaults.standard.set(Date(), forKey: Self.firmwareAttemptKey) }
         loadChangeSync?.cancel()
         let oldSync = syncTask
-        oldSync?.cancel()
+        firmwareActivity = oldSync == nil ? "Checking reader firmware…" : "Firmware update queued after article sync…"
         firmwareTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 self.firmwareTask = nil
+                self.firmwareIsAutomatic = false
                 if self.pendingFirmwareVersion == nil { self.firmwareUpdating = false }
+                if self.firmwareReconnectPending { self.verifyFirmwareAfterReboot() }
             }
             #if os(iOS)
+            let assertion = UIApplication.shared.beginBackgroundTask(withName: "paperboy.firmware") {
+                Task { @MainActor [weak self] in
+                    if self?.pendingFirmwareVersion == nil { self?.firmwareTask?.cancel() }
+                }
+            }
+            defer { if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) } }
             let priorIdleTimer = UIApplication.shared.isIdleTimerDisabled
             UIApplication.shared.isIdleTimerDisabled = true
             defer { UIApplication.shared.isIdleTimerDisabled = priorIdleTimer }
             #endif
             await oldSync?.value
             do {
-                self.firmwareActivity = "Downloading firmware…"
-                let release: FirmwareRelease
+                try Task.checkCancellation()
+                guard let repository = self.firmwareRepository else { throw SyncError.dataSource("firmware cache is unavailable") }
+                self.firmwareActivity = "Checking reader firmware…"
+                let version: String
+                let image: Data
                 #if DEBUG
                 if validation {
                     let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("paperboy-firmware-validation.bin")
                     let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
                     guard size <= FirmwareUpdateSession.maximumBytes else { throw URLError(.dataLengthExceedsMaximum) }
-                    release = FirmwareRelease(version: "0.2.0-paperboy", image: try Data(contentsOf: file))
-                } else { release = try await FirmwareRelease.latest() }
+                    version = "0.2.0-paperboy"
+                    image = try Data(contentsOf: file)
+                } else {
+                    let release = try await repository.latestMetadata(force: !automatic)
+                    guard self.shouldInstall(release.version, automatic: automatic) else { return }
+                    version = release.version
+                    self.firmwareActivity = "Preparing firmware…"
+                    image = try await repository.image(for: release)
+                }
                 #else
-                release = try await FirmwareRelease.latest()
+                let release = try await repository.latestMetadata(force: !automatic)
+                guard self.shouldInstall(release.version, automatic: automatic) else { return }
+                version = release.version
+                self.firmwareActivity = "Preparing firmware…"
+                image = try await repository.image(for: release)
                 #endif
+                try Task.checkCancellation()
+                if automatic, !self.settings.automaticallyUpdateFirmware { return }
+                self.cancelFetch()
                 let transfer = FirmwareUpdateSession(transport: self.bluetooth.transport) { value in
-                    Task { @MainActor [weak self] in if self?.pendingFirmwareVersion == nil { self?.firmwareActivity = "Sending firmware: \(Int(value * 100))%" } }
+                    Task { @MainActor [weak self] in
+                        if self?.firmwareUpdating == true, self?.pendingFirmwareVersion == nil {
+                            self?.firmwareActivity = "Sending firmware: \(Int(value * 100))%"
+                        }
+                    }
                 }
-                guard let previous = try await transfer.install(release.image, targetVersion: release.version) else {
+                let result = try await transfer.transfer(image, targetVersion: version,
+                    maximumTransferBytes: self.hasLongFirmwareWindow ? nil : 256 * 1024, willCommit: { [weak self] previous in
+                    try await self?.rememberFirmwareCommit(version: version, previous: previous)
+                })
+                switch result {
+                case .current:
+                    self.clearFirmwarePartial()
                     self.firmwareActivity = "Reader firmware is up to date."
-                    return
+                case .paused(let bytes):
+                    UserDefaults.standard.removeObject(forKey: Self.firmwareFailedKey)
+                    if bytes > 0 {
+                        UserDefaults.standard.set(true, forKey: Self.firmwarePartialKey)
+                        UserDefaults.standard.set(bytes == image.count, forKey: Self.firmwareStagedKey)
+                        self.firmwareActivity = "Firmware cached on reader: \(Int(Double(bytes) / Double(image.count) * 100))%. It will continue at the next sync."
+                    } else {
+                        self.firmwareActivity = "Firmware is ready for a longer update window."
+                    }
+                case .committed(let previous):
+                    self.clearFirmwarePartial()
+                    self.firmwareActivity = "Installing firmware; waiting for the reader to restart…"
+                    AppLog.post("Firmware install accepted: \(previous) -> \(version); waiting for reboot")
                 }
-                self.pendingFirmwareVersion = release.version
-                self.pendingFirmwarePrevious = previous
-                self.firmwareActivity = "Installing firmware; waiting for the reader to restart…"
-                AppLog.post("Firmware install accepted: \(previous) -> \(release.version); waiting for reboot")
-                self.firmwareTimeout = Task { [weak self] in
-                    do { try await Task.sleep(for: .seconds(120)) } catch { return }
-                    guard let self, self.pendingFirmwareVersion != nil else { return }
-                    self.pendingFirmwareVersion = nil
-                    self.firmwareUpdating = false
-                    self.firmwareActivity = nil
-                    self.firmwareError = "The reader has not reconnected. Its update is not yet confirmed; leave it powered on in Library."
+            } catch let rejection as FirmwareCommitRejection {
+                self.clearPendingFirmware()
+                UserDefaults.standard.set(true, forKey: Self.firmwareFailedKey)
+                self.firmwareActivity = nil
+                self.firmwareError = rejection.description
+                AppLog.post("Firmware commit declined: \(rejection)")
+            } catch where self.pendingFirmwareVersion != nil {
+                // A commit may have reached the reader even if its acknowledgement was lost.
+                self.firmwareActivity = "Waiting for the reader to confirm its firmware update…"
+                AppLog.post("Firmware commit needs verification: \(error)")
+            } catch is CancellationError {
+                if (self.deviceProtocolVersion ?? 0) >= 3 {
+                    UserDefaults.standard.set(true, forKey: Self.firmwarePartialKey)
                 }
+                self.firmwareActivity = nil
+                AppLog.post("Firmware work deferred; it will retry at a later sync")
             } catch {
+                UserDefaults.standard.set(true, forKey: Self.firmwareFailedKey)
                 self.firmwareActivity = nil
                 self.firmwareError = String(describing: error)
                 AppLog.post("Firmware update failed: \(error)")
@@ -521,15 +640,63 @@ final class SyncCoordinator: ObservableObject {
         }
     }
 
+    private func shouldInstall(_ version: String, automatic: Bool) -> Bool {
+        if let installed = device.firmware {
+            if installed == version || FirmwareUpdatePolicy.isUpgrade(installed, from: version) {
+                clearFirmwarePartial()
+                firmwareActivity = "Reader firmware is up to date."
+                return false
+            }
+            if !automatic || FirmwareUpdatePolicy.isUpgrade(version, from: installed) { return true }
+        } else if !automatic { return true }
+        firmwareActivity = nil
+        return false
+    }
+
+    private func rememberFirmwareCommit(version: String, previous: String) throws {
+        try Task.checkCancellation()
+        guard let url = firmwarePendingURL else { throw SyncError.dataSource("firmware confirmation record is unavailable") }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(["version": version, "previous": previous]).write(to: url, options: .atomic)
+        pendingFirmwareVersion = version
+        pendingFirmwarePrevious = previous
+        armFirmwareTimeout()
+    }
+
+    private func clearFirmwarePartial() {
+        UserDefaults.standard.removeObject(forKey: Self.firmwarePartialKey)
+        UserDefaults.standard.removeObject(forKey: Self.firmwareStagedKey)
+        UserDefaults.standard.removeObject(forKey: Self.firmwareFailedKey)
+    }
+
+    private func armFirmwareTimeout() {
+        firmwareTimeout?.cancel()
+        firmwareTimeout = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(120)) } catch { return }
+            guard let self, self.pendingFirmwareVersion != nil else { return }
+            self.firmwareUpdating = false
+            self.firmwareActivity = nil
+            self.firmwareError = "The reader has not reconnected. Its update is not yet confirmed; leave it powered on in Library."
+        }
+    }
+
+    private func clearPendingFirmware() {
+        pendingFirmwareVersion = nil
+        pendingFirmwarePrevious = nil
+        if let url = firmwarePendingURL { try? FileManager.default.removeItem(at: url) }
+        firmwareReconnectPending = false
+        firmwareTimeout?.cancel()
+    }
+
     private func verifyFirmwareAfterReboot() {
         guard firmwareTask == nil, let expected = pendingFirmwareVersion else { return }
+        firmwareReconnectPending = false
         firmwareTask = Task { [weak self] in
             guard let self else { return }
-            var verified = false
             defer {
                 self.firmwareTask = nil
                 self.firmwareUpdating = false
-                if verified { self.readerConnected() }
+                self.readerConnected()
             }
             do {
                 let transport = self.bluetooth.transport
@@ -537,21 +704,19 @@ final class SyncCoordinator: ObservableObject {
                 let reply = try Frame.decode(try await transport.receive(timeout: .seconds(15)))
                 guard case .helloAck(let ack) = reply else { throw SyncError.protocolViolation("missing post-update handshake") }
                 self.device.firmware = ack.firmwareVersion
+                self.deviceProtocolVersion = ack.version
                 self.saveDeviceStatus()
                 guard ack.firmwareVersion == expected, ack.firmwareVersion != self.pendingFirmwarePrevious else {
                     throw SyncError.transport("reader restarted with \(ack.firmwareVersion); expected \(expected)")
                 }
-                self.firmwareTimeout?.cancel()
-                self.pendingFirmwareVersion = nil
+                self.clearPendingFirmware()
                 self.firmwareActivity = "Firmware updated to \(ack.firmwareVersion)."
                 AppLog.post("Firmware update verified after reboot: \(ack.firmwareVersion)")
-                verified = true
                 #if DEBUG
                 UserDefaults.standard.set(true, forKey: "paperboy.firmwareValidation.completed")
                 #endif
             } catch {
-                self.pendingFirmwareVersion = nil
-                self.firmwareTimeout?.cancel()
+                self.clearPendingFirmware()
                 self.firmwareActivity = nil
                 self.firmwareError = String(describing: error)
                 AppLog.post("Firmware verification failed: \(error)")
@@ -563,12 +728,28 @@ final class SyncCoordinator: ObservableObject {
 
     /// Work for a background task: fetch within the time iOS allows.
     func backgroundFetch(includeWebSources: Bool, limitSeconds: Double) async -> Bool {
+        bluetooth.start()
         let summary = await fetch(reason: "background", includeWebSources: includeWebSources, limitSeconds: limitSeconds)
+        if !Task.isCancelled, case .connected = bluetooth.state {
+            readerConnected()
+            await syncTask?.value
+            if includeWebSources { await maybeAutomaticallyUpdateFirmware() }
+        } else if includeWebSources, settings.automaticallyUpdateFirmware, !Task.isCancelled,
+                  let repository = firmwareRepository {
+            do {
+                let release = try await repository.latestMetadata()
+                if let installed = device.firmware, FirmwareUpdatePolicy.isUpgrade(release.version, from: installed) {
+                    _ = try await repository.image(for: release)
+                }
+            } catch { AppLog.post("Firmware preparation deferred: \(error)") }
+        }
         return summary.failed == 0 || summary.added > 0
     }
 
     func cancelBackgroundWork() {
         cancelFetch()
+        syncTask?.cancel()
+        if firmwareIsAutomatic, pendingFirmwareVersion == nil { firmwareTask?.cancel() }
     }
 }
 
@@ -605,12 +786,26 @@ extension SyncCoordinator {
 
     private func runBackgroundTask(_ box: BackgroundTaskBox, includeWebSources: Bool, limitSeconds: Double) async {
         scheduleBackgroundTasks()  // always queue the next one first
+        if includeWebSources { processingBackgroundTasks += 1 }
+        defer { if includeWebSources { processingBackgroundTasks -= 1 } }
+        let work = Task { @MainActor in
+            let ok = await self.backgroundFetch(includeWebSources: includeWebSources, limitSeconds: limitSeconds)
+            if includeWebSources {
+                await self.firmwareTask?.value
+                while self.firmwareUpdating, self.pendingFirmwareVersion != nil, !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(1)) } catch { break }
+                }
+            }
+            return ok && !Task.isCancelled && self.pendingFirmwareVersion == nil
+        }
         // iOS calls the expiration handler on a queue of its choosing, so it must not be
         // main-actor isolated: hence the explicit @Sendable and the hop.
         box.task.expirationHandler = { @Sendable in
+            work.cancel()
             Task { @MainActor in SyncCoordinator.shared.cancelBackgroundWork() }
         }
-        let ok = await backgroundFetch(includeWebSources: includeWebSources, limitSeconds: limitSeconds)
+        let ok = await work.value
+        box.task.expirationHandler = nil
         box.task.setTaskCompleted(success: ok)
     }
 

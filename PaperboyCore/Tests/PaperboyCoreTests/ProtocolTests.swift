@@ -109,7 +109,7 @@ private let sampleID = ArticleID(hex: "0102030405060708")!
         ]
         #expect(expected.count == FrameType.allCases.count)
         for (type, byte) in expected { #expect(type.rawValue == byte) }
-        #expect(SyncProtocol.version == 2)
+        #expect(SyncProtocol.version == 3)
         #expect(SyncProtocol.serviceUUID == "8E400001-7B2A-4B1F-9C5D-5A1EF0C0DE01")
         #expect(SyncProtocol.rxCharacteristicUUID == "8E400002-7B2A-4B1F-9C5D-5A1EF0C0DE01")
         #expect(SyncProtocol.txCharacteristicUUID == "8E400003-7B2A-4B1F-9C5D-5A1EF0C0DE01")

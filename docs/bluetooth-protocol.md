@@ -1,4 +1,4 @@
-# Paperboy Bluetooth protocol (versions 1 and 2)
+# Paperboy Bluetooth protocol (versions 1 to 3)
 
 Service `8E400001-7B2A-4B1F-9C5D-5A1EF0C0DE01`
 
@@ -15,7 +15,7 @@ Phone → device:
 
 | Type | Name | Payload |
 |---|---|---|
-| 0x01 | HELLO | protocol version u8 (1 or 2), unix time u32 |
+| 0x01 | HELLO | protocol version u8 (1 to 3), unix time u32 |
 | 0x02 | LIST | none |
 | 0x10 | PUT_BEGIN | id[8], size u32, crc32 u32, time u32, source len u8 + bytes, title len u8 + bytes, author len u8 + bytes |
 | 0x11 | PUT_DATA | raw bytes (sent without response) |
@@ -84,12 +84,13 @@ must reconnect and read the expected, changed firmware version before reporting
 success. The running slot, article files, and progress caches are not overwritten.
 This mechanism does not provide automatic rollback of an image that later crashes.
 
-Before commit is accepted, abort, disconnect, leaving the eligible screen, or a
-30-second stalled transfer abandons staging. After accepted commit, abort frames
+For the legacy 0x40 begin command, abort, disconnect, leaving the eligible screen,
+or a 30-second stalled transfer abandons staging before commit. Protocol 3's
+resumable command preserves checkpoints as described below. After accepted commit, abort frames
 are ignored and a disconnect does not cancel installation. Leaving the eligible
 screen can still stop the operation before flashing; version verification detects
-that the requested update did not complete. The SD file may survive power loss but is never auto-installed;
-the next firmware begin replaces it. Rejected/interrupted transfers do not change
+that the requested update did not complete. An SD image is never auto-installed
+without a new complete validation and commit. Rejected/interrupted transfers do not change
 boot selection. The first firmware with this extension requires USB installation.
 
 ## Library timestamps
@@ -115,10 +116,10 @@ receiving, validated, or committed. A stalled transfer clears this hold after
 
 ## Protocol 2: metadata-only bumps
 
-A new phone sends HELLO version 2. New firmware returns version 2 for such a
-phone, and version 1 for old phones. Version 2 phones accept version 1 for basic
-article sync and firmware updates; they keep bump requests queued until firmware
-supports them. Existing article frames are unchanged.
+Protocol 2 introduced metadata-only bumps. Current firmware negotiates the lesser
+of the requested version and 3; current phones accept versions 1, 2, and 3.
+Version 1 readers retain ordinary article sync and legacy firmware updates;
+bumps wait until the firmware supports version 2. Existing article frames are unchanged.
 
 | Type | Name | Payload |
 |---|---|---|
@@ -137,5 +138,54 @@ its store-generation signal so an idle Library refreshes the ordering.
 Firmware keeps a clock-independent sequence per path, persisted with a reserved
 counter. Opening a successfully rendered book or article also touches it. The
 three reader views are Touched, Added, Published, newest first. The sleep screen
-reuses the Paperboy artwork as a 1,800-byte monochrome bitmap. Generate it from
+uses upright dark Paperboy artwork on white as an 18,432-byte monochrome bitmap. Generate it from
 `src/images/PaperboyIcon.png` using `scripts/generate_paperboy_logo.py`.
+
+## Protocol 3: resumable firmware staging
+
+| Phone frame | Payload | Device reply |
+|---|---|---|
+| 0x45 FIRMWARE_RESUME | image size u32, whole-image zlib CRC32 u32, SHA-256 identity[32] | 0xC5, status u8, saved offset u32, saved prefix CRC32 u32 |
+| 0x46 FIRMWARE_PAUSE | none | 0xC6, status u8, saved offset u32, saved prefix CRC32 u32 |
+
+Resume requires the same encrypted, bonded authorization and battery checks as
+legacy begin. A different image identity starts a new staging file. The phone
+checks the returned offset against its image size and compares the saved prefix
+CRC with its own image prefix before sending any missing bytes. Invalid prefixes
+are explicitly aborted/reset. Progress values are absolute image offsets; the
+8192-byte window starts at the returned offset. Existing data/end/commit frames
+are reused. Versions 1 and 2 continue to use legacy begin in a long window.
+
+Pause closes an active data file and publishes its checkpoint, or retains an
+already validated checkpoint, then releases the firmware-busy hold. It also starts the normal BYE grace period so a pre-sleep
+session can finish. The phone validates the acknowledged checkpoint prefix
+before reporting progress. Disconnect, leaving Library, and inactivity also close and
+checkpoint a healthy resumable receiver. Reading and ordinary article sync remain
+available between windows. An interrupted transfer does not erase earlier
+durable checkpoints. Storage failures may discard the current uncheckpointed
+tail; a failed final checkpoint preserves earlier durable progress. Corruption
+or a missing/short data file may require a fresh stage.
+
+`/.crosspoint/paperboy-firmware.id` is a checked 56-byte record: PRF1 magic u32,
+size u32, whole-image CRC32 u32, SHA-256 identity[32], checkpoint offset u32,
+prefix CRC32 u32, then CRC32 over the preceding 52 bytes. The data file is closed
+before publishing its checkpoint via `.tmp` and `.bak`. A missing/invalid primary
+recovers a valid temp, then backup, restoring it before reuse. Following power
+loss, any bytes beyond the checkpoint are truncated. Resume reads this bounded
+metadata rather than rescanning the growing image every window. End rereads the
+complete actual SD file to check its CRC before image validation and commit;
+prefix metadata alone is never sufficient to install.
+
+The phone stages up to 256 KiB per short background window, then pauses, including
+when all bytes are staged. A foreground or scheduled processing window completes
+validation and the A/B installation. Expiration before commit preserves the stage
+and retries at a later sync. Commit intent is persisted on the phone before the
+command, allowing a relaunched app to confirm the expected version after reboot.
+An accepted commit is still not reported as a completed installation until that
+confirmation. Reader firmware predating protocol 3 needs one complete OTA update
+to acquire resume support; existing Bluetooth-capable firmware needs no new USB
+bootstrap for this upgrade.
+
+A definite nonzero commit reply means the reader did not accept installation.
+The phone clears its pending confirmation record and resumes normal maintenance.
+Lost/ambiguous commit delivery retains the record for version verification.
