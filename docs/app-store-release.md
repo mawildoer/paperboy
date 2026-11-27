@@ -191,3 +191,24 @@ GitHub release and its disk cache, with verified image integrity.
 TestFlight delivery and the 0.4.0 firmware release are checked separately before
 reporting availability. Physical interruption/resume and display checks remain
 human device checks; no USB app install or reader flash is part of this update.
+
+Published app source `5f980c2`: [normal CI](https://github.com/mawildoer/paperboy/actions/runs/45919047014)
+and [TestFlight CI](https://github.com/mawildoer/paperboy/actions/runs/45919067651)
+passed. Build **108.1** was archived with iOS SDK 27.2 for both app and share
+extension. Apple reported `VALID` and ready for configured internal testers.
+
+Firmware source `2956d36` passed branch and [release CI](https://github.com/mawildoer/crosspoint-reader/actions/runs/45919202303)
+and is published as [paperboy-v0.4.0](https://github.com/mawildoer/crosspoint-reader/releases/tag/paperboy-v0.4.0).
+The latest-release API selects it. All downloaded assets matched SHA256SUMS;
+esptool validated the ESP32-C3 checksum/hash. The 5,551,696-byte image fits the
+OTA slot, contains the exact new logo, runtime version and checkpoint path, and
+matches BUILD.txt's source revision. The actual FirmwareRepository code downloaded
+and verified the live 0.4.0 release, then read back its cached image successfully.
+Binary SHA-256: `ed08ef8e9a9fe2e12792ba3c5ee49fdb4ef8b5f7748b6e6c7b014ef64cec5580`.
+
+Install 108.1 from TestFlight, keep the reader in Library with power or over 30%
+battery, and use Update beside Firmware once to bootstrap 0.4.0 in a complete
+window. Confirm `0.4.0-paperboy` after reboot and the large upright mark on white.
+Future supported updates can resume staged bytes between sync windows. Actual
+phone/reader installation, interruption and panel observations remain pending
+human confirmation; publication and host checks are not physical-device results.
