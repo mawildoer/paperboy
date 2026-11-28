@@ -12,6 +12,12 @@ The web extractor uses local reader-mode heuristics. NYT also has a structured-d
 
 At launch, Paperboy checks old previews that begin with ad controls and rebuilds the affected phone EPUB and preview from the local chapter. This keeps images, article identity and library state. Copies already on the e-reader keep their reading position. A subsequent fresh transfer uses the cleaned file.
 
+## Shared publisher links
+
+Paperboy opens recognized Substack, Medium, New York Times and Economist links in the same persistent browser session used for publisher sign-in. This also applies to supported publisher destinations shared through Apple News. A successful re-share refreshes the stored EPUB and preview on the phone while preserving its added time and reading state. A future transfer uses the refreshed EPUB. A copy already on the reader keeps its reading position and text. An access or network failure leaves the previous phone copy intact.
+
+Other sites can still supply article content through the Safari share extension. Shared PDF attachments continue through the PDF importer.
+
 ## Apple News
 
 Open a story in Apple News, choose **Share → Paperboy**, then let Paperboy sync as usual. Paperboy follows the share link to the publisher’s web edition and uses the same import and signed-in sources as a direct publisher share. Sharing both links queues a single article. If Apple supplies no publisher link, Paperboy explains how to share from Safari when a web edition exists.
@@ -22,11 +28,11 @@ Access depends on what the publisher makes available on the web. Apple News+ acc
 
 The Economist uses its persistent in-app WebKit session. Selecting **Use this session** enables front-page discovery. Foreground refreshes and scheduled website fetches discover dated story links in front-page order. The per-fetch limit and library retention window apply. Fetched items appear in the phone library, and shared items enter the reader load queue.
 
-Safari can supply the readable page directly. A URL-only share, including one from The Economist app, opens in the Paperboy website session. A gift URL retains its query when sent to the publisher. The library uses the story URL without its tracking or gift parameters for deduplication. A publisher sign-in, subscription prompt or verification screen can require action in the website session.
+Both Safari and URL-only shares open in Paperboy’s Economist website session. Gift links keep the access parameters the publisher needs for navigation. The library uses the canonical story URL for deduplication.
 
 ## Medium
 
-Share a readable Medium page from Safari, or sign into Medium inside Paperboy to
+Share a Medium story link from Safari, or sign into Medium inside Paperboy to
 monitor its rendered Following page. There is no separate RSS subscription mode.
 The signed-in WebKit session loads story pages; local Readability extracts text,
 author, publication time, figures and captions. Explicit visible member-access

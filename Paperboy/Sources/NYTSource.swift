@@ -212,7 +212,7 @@ final class NYTSource: NSObject, WKNavigationDelegate {
                 // Keep the id tied to the URL discovery used, so "already known" stays true.
                 article.url = URLCanonicalizer.canonicalize(item.url)
                 article = await ArticleImagePipeline.prepare(article)
-                try await store.add(article)
+                try await store.add(article, publisher: .nyt)
                 summary.added += 1
                 budget -= 1
                 AppLog.post("NYT stored: \(article.title)")

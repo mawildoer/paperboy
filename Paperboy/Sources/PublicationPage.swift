@@ -76,6 +76,12 @@ final class PublicationPage: NSObject, WKNavigationDelegate {
             guard WebPublicationSource.isEconomistPublisherURL(finalURL) else { throw PublicationPageError.openOnWebsite }
             let html = try await ReaderModeExtractor.economistSnapshot(in: web)
             return .init(url: finalURL, html: html)
+        case .substackStory:
+            return try await SubstackSharedStory.snapshot(in: web)
+        case .nytStory:
+            return .init(url: finalURL, html: try await ReaderModeExtractor.sharedNYTSnapshot(in: web))
+        case .sharedMediumStory:
+            return .init(url: finalURL, html: try await ReaderModeExtractor.sharedMediumSnapshot(in: web))
         case .mediumStory:
             let html = try await web.evaluateJavaScript("document.documentElement.outerHTML") as? String ?? ""
             return .init(url: finalURL, html: html)

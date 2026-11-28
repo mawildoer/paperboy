@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Whether an article belongs on the reader. Chosen per article in the phone app.
@@ -23,6 +24,8 @@ public struct StoredArticle: Codable, Sendable, Equatable, Identifiable {
     public var id: ArticleID
     public var url: String
     public var source: String
+    /// The publisher importer to use when this URL is shared again, including custom domains.
+    public var sharedPublisher: SharedPublisher?
     public var title: String
     public var author: String
     /// Publication date.
@@ -81,6 +84,7 @@ public struct StoredArticle: Codable, Sendable, Equatable, Identifiable {
         id = try c.decode(ArticleID.self, forKey: .id)
         url = try c.decode(String.self, forKey: .url)
         source = try c.decode(String.self, forKey: .source)
+        sharedPublisher = try c.decodeIfPresent(SharedPublisher.self, forKey: .sharedPublisher)
         title = try c.decode(String.self, forKey: .title)
         author = try c.decode(String.self, forKey: .author)
         date = try c.decode(Date.self, forKey: .date)
@@ -140,6 +144,7 @@ public actor ArticleStore {
     public init(directory: URL) throws {
         self.directory = directory
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Self.recoverRefresh(in: directory)
         let index = directory.appendingPathComponent("index.json")
         if let data = try? Data(contentsOf: index) {
             let decoder = JSONDecoder()
@@ -155,12 +160,14 @@ public actor ArticleStore {
         directory.appendingPathComponent("\(id.hex).epub")
     }
 
-    private func save() throws {
+    private func save(replacing record: StoredArticle? = nil, to destination: URL? = nil) throws {
+        var records = articles
+        if let record { records[record.id] = record }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        let list = articles.values.sorted { $0.id.hex < $1.id.hex }
-        try encoder.encode(list).write(to: indexURL, options: .atomic)
+        let list = records.values.sorted { $0.id.hex < $1.id.hex }
+        try encoder.encode(list).write(to: destination ?? indexURL, options: .atomic)
     }
 
     // MARK: Reading
@@ -189,15 +196,26 @@ public actor ArticleStore {
 
     /// Package an article and add it. An article that is already known is left untouched.
     @discardableResult
-    public func add(_ article: Article, fetchedAt: Date = Date(), load: LoadState = .off) throws -> StoredArticle {
+    public func add(_ article: Article, fetchedAt: Date = Date(), load: LoadState = .off,
+                    publisher: SharedPublisher? = nil) throws -> StoredArticle {
         if let existing = articles[article.id] { return existing }
+        return try store(article, fetchedAt: fetchedAt, load: load, publisher: publisher)
+    }
+
+    private func store(_ article: Article, fetchedAt: Date, load: LoadState, publisher: SharedPublisher?,
+                       preserving existing: StoredArticle? = nil) throws -> StoredArticle {
         var article = article
         if article.source != "PDF" { article.bodyXHTML = ArticleAdControls.clean(article.bodyXHTML) }
         let epub = try EpubBuilder.build(article)
-        return try add(
+        var stored = StoredArticle(
             id: article.id, url: article.url, source: article.source, title: article.title, author: article.author,
-            date: article.date, epub: epub, fetchedAt: fetchedAt, load: load,
-            preview: Self.preview(ofXHTML: article.bodyXHTML))
+            date: article.date, fetchedAt: fetchedAt, read: existing?.read ?? false, readAt: existing?.readAt,
+            onDevice: existing?.onDevice ?? false, retiredAt: nil, size: epub.count, crc32: CRC32.checksum(epub),
+            load: load, preview: Self.preview(ofXHTML: article.bodyXHTML))
+        stored.bumpedAt = existing?.bumpedAt
+        stored.pendingBump = existing?.pendingBump
+        stored.sharedPublisher = publisher ?? articles[stored.id]?.sharedPublisher
+        return try persist(stored, epub: epub)
     }
 
     @discardableResult
@@ -206,28 +224,103 @@ public actor ArticleStore {
         fetchedAt: Date = Date(), load: LoadState = .off, preview: String = ""
     ) throws -> StoredArticle {
         if let existing = articles[id] { return existing }
-        try epub.write(to: fileURL(for: id), options: .atomic)
         let stored = StoredArticle(
             id: id, url: url, source: source, title: title, author: author, date: date, fetchedAt: fetchedAt, read: false,
             readAt: nil, onDevice: false, retiredAt: nil, size: epub.count, crc32: CRC32.checksum(epub),
             load: load, preview: preview)
-        articles[id] = stored
-        try save()
-        return stored
+        return try persist(stored, epub: epub)
     }
 
-    /// A feed fetch may have added the publisher URL while a shared story was being extracted.
-    public func addShared(_ article: Article) throws -> StoredArticle {
-        if let existing = articles[article.id] {
-            if !existing.isRetired {
-                try setLoad(article.id, existing.read || existing.load == .lock ? .lock : .load)
-                return articles[article.id] ?? existing
-            }
-            articles[article.id] = nil
-            do { return try add(article, load: .load) }
-            catch { articles[article.id] = existing; throw error }
+    /// Queue a share. Opt in to replacing the phone copy after extracting a known publisher story.
+    /// Reader presence is keyed by ID, so an existing reader copy keeps its EPUB and position.
+    public func addShared(_ article: Article, refreshExisting: Bool = false,
+                          publisher: SharedPublisher? = nil) throws -> StoredArticle {
+        guard var existing = articles[article.id] else {
+            return try add(article, load: .load, publisher: publisher)
         }
-        return try add(article, load: .load)
+        if existing.isRetired && !refreshExisting {
+            return try store(article, fetchedAt: Date(), load: .load, publisher: publisher)
+        }
+        let load: LoadState = existing.read || existing.load == .lock ? .lock : .load
+        if refreshExisting {
+            return try store(article, fetchedAt: existing.fetchedAt, load: load, publisher: publisher, preserving: existing)
+        }
+        existing.load = load
+        existing.sharedPublisher = publisher ?? existing.sharedPublisher
+        return try persist(existing)
+    }
+
+    private func persist(_ record: StoredArticle, epub: Data? = nil) throws -> StoredArticle {
+        let previous = articles[record.id]
+        let url = fileURL(for: record.id)
+        try Self.recoverRefresh(in: directory)
+        if let epub {
+            let cached: Data?
+            do { cached = try Data(contentsOf: url, options: .mappedIfSafe) }
+            catch CocoaError.fileReadNoSuchFile { cached = nil }
+
+            if cached != epub {
+                if previous != record && (previous != nil || cached != nil) {
+                    try replaceCachedEPUB(epub, at: url, record: record, hadFile: cached != nil)
+                    articles[record.id] = record
+                    return record
+                }
+                try epub.write(to: url, options: .atomic)
+            }
+        }
+        if previous != record {
+            try save(replacing: record)
+            articles[record.id] = record
+        }
+        return record
+    }
+
+    /// Keep the old EPUB linked until renaming the prepared index commits both changes.
+    /// A staged index left after interruption tells recovery to restore the previous file.
+    private func replaceCachedEPUB(_ data: Data, at url: URL, record: StoredArticle, hadFile: Bool) throws {
+        let files = FileManager.default
+        let journal = directory.appendingPathComponent(".refresh")
+        let stagedIndex = journal.appendingPathComponent("index.json")
+        try files.createDirectory(at: journal, withIntermediateDirectories: false)
+        do {
+            if hadFile {
+                try files.linkItem(at: url, to: journal.appendingPathComponent(url.lastPathComponent))
+            } else {
+                try Data().write(to: journal.appendingPathComponent("\(record.id.hex).missing"))
+            }
+            try save(replacing: record, to: stagedIndex)
+            try data.write(to: url, options: .atomic)
+            try Self.rename(stagedIndex, over: indexURL)
+        } catch {
+            try Self.recoverRefresh(in: directory)
+            throw error
+        }
+        // Once the staged index has moved, any remaining journal only needs cleanup.
+        try? files.removeItem(at: journal)
+    }
+
+    private static func recoverRefresh(in directory: URL) throws {
+        let files = FileManager.default
+        let journal = directory.appendingPathComponent(".refresh")
+        guard files.fileExists(atPath: journal.path) else { return }
+        if files.fileExists(atPath: journal.appendingPathComponent("index.json").path) {
+            for item in try files.contentsOfDirectory(at: journal, includingPropertiesForKeys: nil) {
+                guard let id = ArticleID(hex: item.deletingPathExtension().lastPathComponent) else { continue }
+                let epub = directory.appendingPathComponent("\(id.hex).epub")
+                if item.pathExtension == "epub" { try rename(item, over: epub) }
+                if item.pathExtension == "missing", files.fileExists(atPath: epub.path) {
+                    try files.removeItem(at: epub)
+                }
+            }
+        }
+        try files.removeItem(at: journal)
+    }
+
+    /// POSIX rename atomically replaces the destination on the same filesystem.
+    private static func rename(_ source: URL, over destination: URL) throws {
+        guard Darwin.rename(source.path, destination.path) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
     }
 
     /// Queue a metadata-only promotion; leave the EPUB, load state and progress untouched.

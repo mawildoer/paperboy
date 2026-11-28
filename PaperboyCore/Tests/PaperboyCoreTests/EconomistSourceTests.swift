@@ -33,9 +33,12 @@ import Testing
         #expect(record.title == headline && record.source == "The Economist" && record.load == .off)
         #expect(record.date == ISODate.parse("2026-11-25T10:11:12Z"))
         let original = try await store.epub(for: record.id)
-        let safari = try await source.sharedArticle(url: URL(string: story + "?utm_source=safari")!, snapshot: html, title: nil)
+        let safari = try await source.sharedArticle(url: URL(string: story + "?utm_source=safari")!,
+                                                   snapshot: html.replacingOccurrences(of: headline, with: "Stale preview"),
+                                                   title: "Stale preview")
+        #expect(safari.title == headline)
         let queued = try await store.addShared(safari)
-        #expect(queued.id == record.id && queued.load == .load && loadedStories == [story])
+        #expect(queued.id == record.id && queued.load == .load && loadedStories == [story, story])
         #expect(try await store.epub(for: queued.id) == original)
     }
 
@@ -47,10 +50,10 @@ import Testing
             addresses.append(address)
             return .init(url: URL(string: gift)!, html: html)
         }
-        let shared = try await source.sharedArticle(url: URL(string: gift + "&utm_source=app")!, snapshot: nil, title: nil)
+        let shared = try await source.sharedArticle(url: URL(string: gift + "&utm_source=app")!)
         #expect(shared.url == story && shared.title == headline)
         let short = URL(string: "https://econ.st/test-share")!
-        let redirected = try await source.sharedArticle(url: short, snapshot: nil, title: nil)
+        let redirected = try await source.sharedArticle(url: short)
         #expect(redirected.id == shared.id && addresses == [gift, short.absoluteString])
     }
 
@@ -80,7 +83,7 @@ import Testing
         let summary = await source.fetchNew(store: store, maxPerFetch: 1, oldest: .distantPast, deadline: Date().addingTimeInterval(15))
         #expect(summary.failed == 1 && summary.added == 0)
         await #expect(throws: EconomistAccessError.self) {
-            try await source.sharedArticle(url: URL(string: story)!, snapshot: gated, title: nil)
+            try await source.sharedArticle(url: URL(string: story)!)
         }
         #expect(await store.all().isEmpty)
     }

@@ -1,5 +1,5 @@
 const economistAccessError = 'economist-access-required';
-const economistBody = [
+const editorialBody = [
   'article', '[itemprop~="articleBody"]', '[data-test-id="ArticleBody" i]',
   '[data-test-id="article-body" i]', '[data-testid="article-body" i]',
 ].join(', ');
@@ -35,26 +35,25 @@ function obscuresText(style, node, rendered) {
 
 // Both Safari and the signed-in WKWebView inspect styles in the live document, before
 // serializing. Keep the node lists aligned when removing a hidden ancestor from the copy.
-function paperboyRenderedClone(doc, visit) {
-  const economist = paperboyIsEconomist(doc.URL);
+function paperboyRenderedClone(doc, visit, strict = paperboyIsEconomist(doc.URL)) {
   const originals = doc.querySelectorAll('*');
-  if (economist && (originals.length > 30000 ||
+  if (strict && (originals.length > 30000 ||
       Array.from(doc.querySelectorAll('link[rel~="stylesheet" i]')).some(link => !link.disabled && !link.sheet))) return null;
   const clone = doc.cloneNode(true);
   const copies = clone.querySelectorAll('*');
   for (let i = 0; i < originals.length && i < 30000; i++) {
     const original = originals[i], copy = copies[i];
     if (!copy.isConnected) continue;
-    if (economist && original.matches(inertContent)) { copy.remove(); continue; }
+    if (strict && original.matches(inertContent)) { copy.remove(); continue; }
     if (original.closest('head')) continue; // title and metadata are non-rendering by design
     const style = doc.defaultView.getComputedStyle(original);
-    if (concealed(style) || (economist && original.matches(hiddenContent))) {
-      if (economist && containsWithheldBody(original)) return null;
+    if (concealed(style) || (strict && original.matches(hiddenContent))) {
+      if (strict && containsWithheldBody(original)) return null;
       copy.remove();
       continue;
     }
-    if (economist && obscuresText(style, original, true)) {
-      if (original.closest(economistBody) && (original.matches('p') || original.querySelector('p'))) return null;
+    if (strict && obscuresText(style, original, true)) {
+      if (original.closest(editorialBody) && (original.matches('p') || original.querySelector('p'))) return null;
       copy.remove();
       continue;
     }
@@ -70,9 +69,18 @@ function paperboyEconomistSnapshot(doc) {
   return clone?.body ? paperboyReaderHTML(clone.documentElement.outerHTML, doc.URL) : {error: economistAccessError};
 }
 
+// Return only the rendered story from the publisher session. Readability runs in the inert view.
+function paperboySharedStorySnapshot(doc, publisher) {
+  const host = new URL(doc.URL).hostname.toLowerCase();
+  if (publisher === 'nyt' && host !== 'nytimes.com' && !host.endsWith('.nytimes.com')) return null;
+  const clone = paperboyRenderedClone(doc, undefined, true);
+  if (!clone?.body || !prepareVisibleArticle(clone, doc.URL)) return null;
+  return clone.documentElement.outerHTML;
+}
+
 // Only the visible editorial DOM is a source of body text. A detached document cannot
 // resolve publisher stylesheets. Such pages need a rendered snapshot from the user's session.
-function prepareEconomistArticle(doc, address) {
+function prepareVisibleArticle(doc, address) {
   const url = new URL(address);
   if (/^(?:myaccount|account|id|auth|login)\./i.test(url.hostname) ||
       /\/(?:log-?in|sign-?in|authenticate|challenge|cdn-cgi)(?:\/|$)/i.test(url.pathname) ||
@@ -84,7 +92,7 @@ function prepareEconomistArticle(doc, address) {
       if (containsWithheldBody(node)) return false;
       node.remove();
     } else if (obscuresText(node.style, node, false)) {
-      if (node.closest(economistBody) && (node.matches('p') || node.querySelector('p'))) return false;
+      if (node.closest(editorialBody) && (node.matches('p') || node.querySelector('p'))) return false;
       node.remove();
     }
   }
@@ -93,6 +101,7 @@ function prepareEconomistArticle(doc, address) {
     '[data-testid*="paywall" i]', '[data-test-id*="paywall" i]', '[id*="paywall" i]',
     '.paywall', '.paywall-container', '.paywall-overlay', '.subscription-wall', '.regwall',
     '.tp-modal', '.tp-backdrop', '[aria-modal="true"]',
+    '[data-testid="gateway-content"]', '#gateway-content', '[data-testid="gateway-container"]',
     'dialog[open]', '#challenge-form', 'input[type="password"]', 'iframe[src*="paywall" i]',
   ].join(', ');
   if (doc.querySelector(wall)) return false;
@@ -117,7 +126,7 @@ function prepareEconomistArticle(doc, address) {
   }
   if (!doc.title) doc.title = doc.querySelector('h1')?.textContent || '';
   doc.querySelectorAll('header, aside, [role="complementary"], .subscription-widget, [data-testid*="teaser" i], [data-test-id*="teaser" i], .article__teaser, .article-preview, .teaser').forEach(node => node.remove());
-  const article = doc.querySelector(economistBody);
+  const article = doc.querySelector(editorialBody);
   if (!article || article.querySelectorAll('p').length < 2) return false;
   doc.body.replaceChildren(article);
   return true;
@@ -130,7 +139,7 @@ function paperboyReaderHTML(html, pageURL) {
   if (savedError === economistAccessError || savedError === 'medium-access-required') return {error: savedError};
   const savedOrigin = doc.head.querySelector('meta[name="paperboy-reader-origin"]')?.content;
   const economistURL = paperboyIsEconomist(pageURL) ? pageURL : paperboyIsEconomist(savedOrigin) ? savedOrigin : null;
-  if (economistURL && !prepareEconomistArticle(doc, economistURL)) return {error: economistAccessError};
+  if (economistURL && !prepareVisibleArticle(doc, economistURL)) return {error: economistAccessError};
   const host = new URL(pageURL).hostname;
   const medium = host === 'medium.com' || host.endsWith('.medium.com') ||
     !!doc.querySelector('meta[property="al:ios:app_name"][content="Medium"], meta[property="al:android:app_name"][content="Medium"]');

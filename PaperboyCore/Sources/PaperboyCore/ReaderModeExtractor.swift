@@ -29,6 +29,23 @@ public final class ReaderModeExtractor: NSObject, WKNavigationDelegate {
         return html
     }
 
+    public static func sharedNYTSnapshot(in webView: WKWebView) async throws -> String {
+        try await sharedSnapshot(in: webView, publisher: "nyt", accessError: SignedInStoryError.nyt)
+    }
+
+    public static func sharedMediumSnapshot(in webView: WKWebView) async throws -> String {
+        try await sharedSnapshot(in: webView, publisher: "medium", accessError: MediumError.accessRequired)
+    }
+
+    private static func sharedSnapshot(in webView: WKWebView, publisher: String, accessError: any Error) async throws -> String {
+        let script = try String(contentsOf: Bundle.module.url(forResource: "ReaderMode", withExtension: "js")!, encoding: .utf8)
+        let value = try await webView.callAsyncJavaScript(
+            script + "\nreturn paperboySharedStorySnapshot(document, publisher);",
+            arguments: ["publisher": publisher], in: nil, contentWorld: .defaultClient)
+        guard let html = value as? String else { throw accessError }
+        return html
+    }
+
     private static func readerScript() throws -> String {
         let library = try String(contentsOf: Bundle.module.url(forResource: "Readability", withExtension: "js")!, encoding: .utf8)
         let wrapper = try String(contentsOf: Bundle.module.url(forResource: "ReaderMode", withExtension: "js")!, encoding: .utf8)
@@ -100,5 +117,12 @@ public final class ReaderModeExtractor: NSObject, WKNavigationDelegate {
     public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         loaded?.resume(throwing: error)
         loaded = nil
+    }
+}
+
+public enum SignedInStoryError: LocalizedError {
+    case nyt
+    public var errorDescription: String? {
+        "Paperboy couldn’t read this article in its New York Times session. Open The New York Times in Sources to check your access."
     }
 }

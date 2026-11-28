@@ -120,7 +120,13 @@ final class ShareViewController: UIViewController {
 
         var record: [String: Any] = ["url": url, "sharedAt": Date().timeIntervalSince1970]
         if let title = page["title"] as? String, !title.isEmpty { record["title"] = title }
-        if let html = page["html"] as? String, !html.isEmpty, html.utf8.count <= Self.maxHTMLBytes { record["html"] = html }
+        let metadata = page["publisherMetadata"] as? String
+        if let address = URL(string: url), SharedPublisher.identify(address, sharedHTML: metadata, substackPublications: []) != nil {
+            // The app fetches the body in its publisher session. Custom sites need the routing hint.
+            if let metadata, !metadata.isEmpty { record["html"] = metadata }
+        } else if let html = page["html"] as? String, !html.isEmpty, html.utf8.count <= Self.maxHTMLBytes {
+            record["html"] = html
+        }
 
         guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup),
               let data = try? JSONSerialization.data(withJSONObject: record) else { return false }

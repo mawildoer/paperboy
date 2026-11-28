@@ -4,6 +4,13 @@ SharePage.prototype = {
   run: function (args) {
     const url = document.URL, title = document.title;
     const economist = paperboyIsEconomist(url);
+    // Readability strips platform identifiers on custom publication domains. Carry only
+    // the routing tags from the original head to the native share extension.
+    const hints = Array.from(document.head?.querySelectorAll(
+      'meta[name="generator" i], meta[name="apple-itunes-app" i], meta[property^="al:" i], ' +
+      'meta[name^="twitter:app:" i], link[rel~="canonical" i], link[rel~="alternate" i][type="application/rss+xml" i]'
+    ) || []).slice(0, 48).map(tag => tag.outerHTML).join('').slice(0, 16384);
+    const complete = result => args.completionFunction({...result, publisherMetadata: hints});
     const captures = [];
     let figureCount = 0;
     const captureFigure = (original, copy) => {
@@ -71,9 +78,9 @@ SharePage.prototype = {
         meta.name = 'paperboy-access-error'; meta.content = error; record.head.append(meta);
         const origin = record.createElement('meta');
         origin.name = 'paperboy-reader-origin'; origin.content = url; record.head.append(origin);
-        args.completionFunction({url, title, html:record.documentElement.outerHTML, error, readerExtracted:false});
+        complete({url, title, html:record.documentElement.outerHTML, error, readerExtracted:false});
       } else {
-        args.completionFunction({url, title:result?.title || title,
+        complete({url, title:result?.title || title,
           html:result?.html || html || document.documentElement.outerHTML, readerExtracted:!!result?.html});
       }
     };

@@ -216,6 +216,194 @@ private func sample(_ n: Int, date: Date = t0) -> Article {
         #expect(await store.all().count == 1)
     }
 
+    @Test func refreshReplacesPhoneContentAndPreservesReadingState() async throws {
+        let directory = try makeTempDirectory("paperboy-store")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let original = sample(1)
+        let stored = try await store.add(original, fetchedAt: t0)
+        try await store.markRead(stored.id, at: t0.addingTimeInterval(day))
+        try await store.setOnDevice(stored.id, true)
+        try await store.bump(stored.id, at: t0)
+        let before = try #require(await store.article(stored.id))
+        let oldEPUB = try await store.epub(for: stored.id)
+
+        var article = original
+        article.title = "Revised headline"
+        article.author = "New byline"
+        article.source = "Publisher"
+        article.date = t0.addingTimeInterval(2 * day)
+        article.bodyXHTML = "<p>Advertisement SKIP ADVERTISEMENT The complete story.</p>"
+        let refreshed = try await store.addShared(article, refreshExisting: true, publisher: .substack)
+        var cleaned = article
+        cleaned.bodyXHTML = ArticleAdControls.clean(article.bodyXHTML)
+        let newEPUB = try EpubBuilder.build(cleaned)
+        #expect(newEPUB != oldEPUB)
+        var expected = before
+        expected.title = article.title
+        expected.author = article.author
+        expected.source = article.source
+        expected.date = article.date
+        expected.preview = "The complete story."
+        expected.size = newEPUB.count
+        expected.crc32 = CRC32.checksum(newEPUB)
+        expected.load = .lock
+        expected.sharedPublisher = .substack
+        #expect(refreshed == expected)
+        let reopened = try ArticleStore(directory: directory)
+        #expect(await reopened.all() == [expected])
+        #expect(try await reopened.epub(for: stored.id) == newEPUB)
+
+        let source = ArticleStoreSyncSource(store: reopened)
+        let existingReader = FakeDevice()
+        existingReader.seed(id: stored.id, data: oldEPUB, read: true)
+        let present = await SyncSession(transport: FakeDeviceTransport(device: existingReader), source: source).run()
+        #expect(present.completed && present.uploaded.isEmpty && present.deleted.isEmpty)
+        #expect(!existingReader.receivedTypes.contains(.putBegin))
+        #expect(existingReader.article(stored.id)?.data == oldEPUB)
+        let emptyReader = FakeDevice()
+        let absent = await SyncSession(transport: FakeDeviceTransport(device: emptyReader), source: source).run()
+        #expect(absent.completed && absent.uploaded == [stored.id])
+        #expect(emptyReader.article(stored.id)?.data == newEPUB)
+    }
+
+    @Test func defaultShareQueuesCachedContentAndIdenticalRefreshAvoidsRewrites() async throws {
+        let directory = try makeTempDirectory("paperboy-store")
+        let files = FileManager.default
+        defer { try? files.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let article = sample(1)
+        let stored = try await store.add(article, publisher: .medium)
+        let file = await store.fileURL(for: stored.id)
+        let index = directory.appendingPathComponent("index.json")
+        try files.setAttributes([.modificationDate: t0], ofItemAtPath: file.path)
+        var other = article
+        other.bodyXHTML = "<p>Another version.</p>"
+        let queued = try await store.addShared(other)
+        #expect(queued.load == .load && queued.preview == stored.preview)
+        #expect(queued.sharedPublisher == .medium && !queued.onDevice)
+        #expect(try await store.epub(for: stored.id) == EpubBuilder.build(article))
+        try await store.setLoad(stored.id, .lock)
+        try files.setAttributes([.modificationDate: t0], ofItemAtPath: index.path)
+        let refreshed = try await store.addShared(article, refreshExisting: true)
+        #expect(refreshed.load == .lock && !refreshed.read && refreshed.sharedPublisher == .medium)
+        #expect(try files.attributesOfItem(atPath: file.path)[.modificationDate] as? Date == t0)
+        #expect(try files.attributesOfItem(atPath: index.path)[.modificationDate] as? Date == t0)
+        #expect(await store.pendingUploads().map(\.id) == [stored.id])
+    }
+
+    @Test func publisherCanBeLearnedForAnOlderIndexWithoutChangingTheEpub() async throws {
+        let directory = try makeTempDirectory("paperboy-store")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let first = try await store.addShared(sample(1))
+        let index = directory.appendingPathComponent("index.json")
+        #expect(try !String(contentsOf: index, encoding: .utf8).contains("sharedPublisher"))
+        let reopened = try ArticleStore(directory: directory)
+        #expect(await reopened.article(first.id) == first)
+        let url = await reopened.fileURL(for: first.id)
+        try FileManager.default.setAttributes([.modificationDate: t0], ofItemAtPath: url.path)
+        let identified = try await reopened.addShared(sample(1), refreshExisting: true, publisher: .medium)
+        #expect(identified.sharedPublisher == .medium)
+        #expect(try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date == t0)
+        let second = try await reopened.addShared(sample(2), publisher: .substack)
+        let again = try ArticleStore(directory: directory)
+        #expect(await again.article(first.id)?.sharedPublisher == .medium)
+        #expect(await again.article(second.id)?.sharedPublisher == .substack)
+    }
+
+    @Test func failedRefreshKeepsGoodContentAndCanBeRetried() async throws {
+        let directory = try makeTempDirectory("paperboy-store")
+        let files = FileManager.default
+        defer { try? files.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let first = try await store.add(sample(1), fetchedAt: t0, publisher: .medium)
+        let oldEPUB = try await store.epub(for: first.id)
+        var revised = sample(1)
+        revised.bodyXHTML = "<p>The full story.</p>"
+        var invalid = revised
+        invalid.images = [ArticleImage(path: "invalid", data: Data(), width: 1, height: 1)]
+        await #expect(throws: EpubBuilder.Failure.invalidImage) {
+            try await store.addShared(invalid, refreshExisting: true, publisher: .substack)
+        }
+        #expect(await store.article(first.id) == first)
+        #expect(try await store.epub(for: first.id) == oldEPUB)
+
+        // Fail the final rename after writing the replacement EPUB.
+        let index = directory.appendingPathComponent("index.json")
+        let savedIndex = directory.appendingPathComponent("saved-index")
+        try files.moveItem(at: index, to: savedIndex)
+        try files.createDirectory(at: index, withIntermediateDirectories: false)
+        await #expect(throws: POSIXError.self) {
+            try await store.addShared(revised, refreshExisting: true, publisher: .substack)
+        }
+        #expect(await store.article(first.id) == first)
+        #expect(try await store.epub(for: first.id) == oldEPUB)
+        try files.removeItem(at: index)
+        try files.moveItem(at: savedIndex, to: index)
+        let reopened = try ArticleStore(directory: directory)
+        #expect(await reopened.article(first.id) == first)
+        #expect(try await reopened.epub(for: first.id) == oldEPUB)
+        let refreshed = try await store.addShared(revised, refreshExisting: true, publisher: .substack)
+        #expect(refreshed.load == .load && refreshed.preview == "The full story.")
+        #expect(refreshed.sharedPublisher == .substack && refreshed.fetchedAt == first.fetchedAt)
+        let afterRetry = try ArticleStore(directory: directory)
+        #expect(await afterRetry.article(first.id) == refreshed)
+        #expect(try await afterRetry.epub(for: first.id) == EpubBuilder.build(revised))
+    }
+
+    @Test func refreshCanRestoreMissingBytesAndReviveARetiredShare() async throws {
+        let directory = try makeTempDirectory("paperboy-store")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let article = sample(1)
+        let first = try await store.addShared(article, publisher: .medium)
+        let url = await store.fileURL(for: first.id)
+        try FileManager.default.removeItem(at: url)
+        #expect(try await store.addShared(article, refreshExisting: true) == first)
+        #expect(try await store.epub(for: first.id) == EpubBuilder.build(article))
+
+        try await store.markRead(first.id, at: t0)
+        try await store.setOnDevice(first.id, true)
+        try await store.applyRetention(now: t0.addingTimeInterval(3 * day))
+        let retired = try #require(await store.article(first.id))
+        #expect(retired.isRetired)
+        var expected = retired
+        expected.retiredAt = nil
+        expected.load = .lock
+        #expect(try await store.addShared(article, refreshExisting: true) == expected)
+        #expect(try await store.epub(for: first.id) == EpubBuilder.build(article))
+    }
+
+    @Test(arguments: [false, true])
+    func reopeningResolvesInterruptedRefresh(indexCommitted: Bool) async throws {
+        let directory = try makeTempDirectory("paperboy-store")
+        let files = FileManager.default
+        defer { try? files.removeItem(at: directory) }
+        let store = try ArticleStore(directory: directory)
+        let original = sample(1)
+        let first = try await store.add(original, fetchedAt: t0)
+        let epub = await store.fileURL(for: first.id)
+        var revised = original
+        revised.title = "Latest title"
+        let oldEPUB = try EpubBuilder.build(original)
+        let newEPUB = try EpubBuilder.build(revised)
+        let index = directory.appendingPathComponent("index.json")
+        let oldIndex = try Data(contentsOf: index)
+        let refreshed = try await store.addShared(revised, refreshExisting: true)
+        let journal = directory.appendingPathComponent(".refresh")
+        try files.createDirectory(at: journal, withIntermediateDirectories: false)
+        try oldEPUB.write(to: journal.appendingPathComponent(epub.lastPathComponent))
+        if !indexCommitted {
+            try files.moveItem(at: index, to: journal.appendingPathComponent("index.json"))
+            try oldIndex.write(to: index, options: .atomic)
+        }
+        let reopened = try ArticleStore(directory: directory)
+        #expect(await reopened.article(first.id) == (indexCommitted ? refreshed : first))
+        #expect(try await reopened.epub(for: first.id) == (indexCommitted ? newEPUB : oldEPUB))
+        #expect(!files.fileExists(atPath: journal.path))
+    }
+
     @Test func previewIsPlainText() {
         let text = ArticleStore.preview(ofXHTML: "<p>Tom &amp; Jerry <em>ran</em>.</p>\n<p>Then   stopped.</p>")
         #expect(text == "Tom & Jerry ran . Then stopped." || text == "Tom & Jerry ran. Then stopped.")

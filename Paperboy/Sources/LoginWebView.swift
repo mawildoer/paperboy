@@ -47,6 +47,11 @@ enum LoginService: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    func ownsCookieDomain(_ value: String) -> Bool {
+        let domain = value.lowercased().trimmingCharacters(in: ["."])
+        return domain == cookieDomainSuffix || domain.hasSuffix("." + cookieDomainSuffix)
+    }
+
     /// UNVERIFIED: the names of the cookies that mean "signed in".
     var sessionCookieNames: Set<String> {
         switch self {
@@ -92,18 +97,19 @@ enum WebSession {
             dataStore.httpCookieStore.getAllCookies { continuation.resume(returning: $0) }
         }
         for cookie in HTTPCookieStorage.shared.cookies ?? []
-        where cookie.domain.lowercased().hasSuffix(service.cookieDomainSuffix)
+        where service.ownsCookieDomain(cookie.domain)
             && !inWebView.contains(where: { $0.name == cookie.name && $0.domain == cookie.domain && $0.path == cookie.path }) {
             await dataStore.httpCookieStore.setCookie(cookie)
         }
         for cookie in await cookies() {
             let domain = cookie.domain.lowercased()
-            let matchesService = domain.hasSuffix(service.cookieDomainSuffix)
+            let matchesService = service.ownsCookieDomain(domain)
             // UNVERIFIED: a Substack publication on a custom domain keeps its own session cookie
             // on that domain; it only exists if the user also signed in there in the web view.
             let matchesExtra = extraHosts.contains { host in
                 let h = host.lowercased()
-                return !h.isEmpty && (domain == h || domain.hasSuffix("." + h) || h.hasSuffix(domain.trimmingCharacters(in: ["."])))
+                let bare = domain.trimmingCharacters(in: ["."])
+                return !h.isEmpty && !bare.isEmpty && (bare == h || bare.hasSuffix("." + h) || h.hasSuffix("." + bare))
             }
             guard matchesService || matchesExtra else { continue }
             HTTPCookieStorage.shared.setCookie(cookie)
@@ -117,7 +123,7 @@ enum WebSession {
     /// Logs which cookies each store holds for a service: names, domains and expiry, never values.
     static func logCookieState(_ service: LoginService, when: String) async {
         func describe(_ cookies: [HTTPCookie]) -> String {
-            let mine = cookies.filter { $0.domain.lowercased().hasSuffix(service.cookieDomainSuffix) }
+            let mine = cookies.filter { service.ownsCookieDomain($0.domain) }
             let session = mine.filter { service.sessionCookieNames.contains($0.name) }.map { cookie -> String in
                 let expiry = cookie.expiresDate.map { "\(Int($0.timeIntervalSinceNow / 86_400))d" } ?? "session-only"
                 return "\(cookie.name)@\(cookie.domain)(\(expiry),len \(cookie.value.count))"
@@ -133,7 +139,7 @@ enum WebSession {
     static func isSignedIn(_ service: LoginService) async -> Bool {
         let now = Date()
         return await cookies().contains { cookie in
-            cookie.domain.lowercased().hasSuffix(service.cookieDomainSuffix)
+            service.ownsCookieDomain(cookie.domain)
                 && service.sessionCookieNames.contains(cookie.name)
                 && !cookie.value.isEmpty
                 && (cookie.expiresDate.map { $0 > now } ?? true)
@@ -147,8 +153,7 @@ enum WebSession {
             await dataStore.removeData(ofTypes: types, for: records)
         }
         let store = dataStore.httpCookieStore
-        for cookie in await cookies() where cookie.domain.trimmingCharacters(in: ["."]).lowercased() == service.cookieDomainSuffix
-            || cookie.domain.lowercased().hasSuffix("." + service.cookieDomainSuffix) {
+        for cookie in await cookies() where service.ownsCookieDomain(cookie.domain) {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 store.delete(cookie) { continuation.resume() }
             }

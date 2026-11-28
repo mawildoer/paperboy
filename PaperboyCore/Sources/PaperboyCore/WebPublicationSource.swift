@@ -5,7 +5,7 @@ import Foundation
 public final class WebPublicationSource {
     public enum Publication { case medium, economist }
 
-    public enum Capture { case links, mediumStory, economistStory }
+    public enum Capture { case links, mediumStory, economistStory, sharedMediumStory, nytStory, substackStory }
     public struct Snapshot {
         public let url: URL
         public let html: String
@@ -34,14 +34,22 @@ public final class WebPublicationSource {
             && url.user == nil && url.password == nil && (url.port == nil || url.port == 443))
     }
 
-    /// Safari can share a readable snapshot even when Paperboy has a different website session.
-    public func sharedArticle(url: URL, snapshot: String?, title: String?) async throws -> Article {
-        if Self.isEconomistPublisherURL(url), let snapshot,
-           let article = try? await economistArticle(html: snapshot, address: url, title: title) { return article }
+    /// Share imports always navigate in Paperboy's session, including when Safari has a snapshot.
+    public func sharedArticle(url: URL, snapshot _: String? = nil, title _: String? = nil) async throws -> Article {
+        let address = publication == .economist ? EconomistDiscovery.loadingURL(for: url) ?? url : url
+        try await limiter.wait()
         try Task.checkCancellation()
-        // Keep the gift token for the publisher to validate.
-        let address = EconomistDiscovery.loadingURL(for: url) ?? url
-        return try await fetchArticle(address.absoluteString)
+        let page = try await loadPage(address.absoluteString, 25, publication == .economist ? .economistStory : .sharedMediumStory)
+        if publication == .economist {
+            return try await economistArticle(html: page.html, address: page.url)
+        }
+        let host = page.url.host?.lowercased()
+        guard page.url.scheme == "https", page.url.user == nil, page.url.password == nil,
+              let host, host == address.host?.lowercased() || MediumDiscovery.isMediumHost(host) ||
+                SharedPublisher.identify(page.url, sharedHTML: page.html, substackPublications: []) == .medium else {
+            throw MediumError.accessRequired
+        }
+        return try await mediumArticle(html: page.html, address: page.url.absoluteString)
     }
 
     private func economistArticle(html: String, address: URL, title: String? = nil) async throws -> Article {
@@ -59,7 +67,11 @@ public final class WebPublicationSource {
         if publication == .economist {
             return try await economistArticle(html: page.html, address: page.url)
         }
-        var article = try await ReaderModeExtractor().article(html: page.html, url: url)
+        return try await mediumArticle(html: page.html, address: url)
+    }
+
+    private func mediumArticle(html: String, address: String) async throws -> Article {
+        var article = try await ReaderModeExtractor().article(html: html, url: address)
         if article.source.isEmpty || MediumDiscovery.isMediumHost(article.source) { article.source = "Medium" }
         return article
     }
@@ -98,7 +110,7 @@ public final class WebPublicationSource {
                 guard article.date >= oldest else { continue }
                 article = await ArticleImagePipeline.prepare(article)
                 try Task.checkCancellation()
-                try await store.add(article)
+                try await store.add(article, publisher: isEconomist ? .economist : .medium)
                 summary.added += 1
                 didStore("\(name) stored: \(article.title)")
             } catch is CancellationError { break }
@@ -115,5 +127,5 @@ public final class WebPublicationSource {
 
 public enum PublicationPageError: LocalizedError {
     case openOnWebsite
-    public var errorDescription: String? { "Open The Economist in Paperboy to check your sign-in, or share the readable article from Safari." }
+    public var errorDescription: String? { "Open The Economist in Paperboy to check your sign-in, then share the article again." }
 }

@@ -169,7 +169,7 @@ final class SyncCoordinator: ObservableObject {
     }
 
     /// Turn every page the share extension left in the app group's Inbox into an article, loaded
-    /// for the reader. A page that cannot be read is tried again on later runs, three times in all.
+    /// for the reader. Interrupted network requests stay queued for a later run.
     func processSharedInbox() async {
         if processingShared { rescanShared = true; return }
         guard let store,
@@ -201,25 +201,18 @@ final class SyncCoordinator: ObservableObject {
                     page.url = publisher.absoluteString
                     page.html = nil
                 }
-                let sharedURL = URL(string: page.url)
-                let economistID = sharedURL.flatMap(EconomistDiscovery.storyURL)
-                let canonical = economistID?.absoluteString ?? URLCanonicalizer.canonicalize(page.url)
-                let id = ArticleID(canonicalURL: canonical)
-                if let known = await store.article(id), !known.isRetired {
-                    try await store.setLoad(id, known.read || known.load == .lock ? .lock : .load)
-                    removeQueued(page, record: file, container: container)
-                    importError = nil
-                    AppLog.post("Shared: \(known.title) is already in the list; loading it")
-                    continue
-                }
-                var article = try await article(forShared: page)
-                // Short and gift links may resolve to a different, canonical Economist story.
-                if page.pdfFile != nil || !WebPublicationSource.isEconomistShare(sharedURL) { article.url = canonical }
-                article = await ArticleImagePipeline.prepare(article)
-                let stored = try await store.addShared(article)
+                let stored = try await SharedArticleImport.run(page, store: store, substackPublications: settings.substackPublications,
+                                                            fetchPublisher: signedInArticle, fetchOther: otherSharedArticle)
                 removeQueued(page, record: file, container: container)
                 importError = nil
                 AppLog.post("Shared: stored \(stored.title) [\(stored.source)]")
+            } catch is CancellationError {
+                break
+            } catch let error as URLError where error.code == .cancelled {
+                if Task.isCancelled { break }
+            } catch let error as URLError where [.notConnectedToInternet, .networkConnectionLost, .timedOut,
+                                                  .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed].contains(error.code) {
+                importError = "Couldn’t reach the website. Paperboy will retry your shared article."
             } catch {
                 page.attempts += 1
                 importError = "Could not import \(page.title ?? "shared document"): \(error.localizedDescription)"
@@ -234,43 +227,56 @@ final class SyncCoordinator: ObservableObject {
         await refreshArticles()
     }
 
-    /// The page as shared when it carries the article; otherwise fetched the way its site needs.
-    private func article(forShared page: SharedPage) async throws -> Article {
+    private func signedInArticle(_ publisher: SharedPublisher, url: URL) async throws -> Article {
+        switch publisher {
+        case .economist:
+            return try await economist.sharedArticle(url: url)
+        case .medium:
+            await WebSession.copyCookies(for: .medium)
+            return try await medium.sharedArticle(url: url)
+        case .substack:
+            await WebSession.copyCookies(for: .substack, alsoHosts: settings.substackPublications)
+            return try await substack.fetchSharedArticle(url)
+        case .nyt:
+            await WebSession.copyCookies(for: .nyt)
+            let page = try await PublicationPage.snapshot(url.absoluteString, 30, .nytStory)
+            guard SharedPublisher.identify(page.url, sharedHTML: nil, substackPublications: []) == .nyt,
+                  page.url.host?.lowercased() != "nyti.ms" else { throw SignedInStoryError.nyt }
+            var article = try await ReaderModeExtractor().article(html: page.html, url: page.url.absoluteString)
+            article.source = "The New York Times"
+            return article
+        }
+    }
+
+    private func otherSharedArticle(_ page: SharedPage) async throws -> SharedArticleImport.Fetch {
         if let filename = page.pdfFile {
             guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else { throw CocoaError(.fileReadUnknown) }
             let file = try PDFInbox.fileURL(named: filename, container: container)
-            return try await Task.detached(priority: .userInitiated) {
+            let article = try await Task.detached(priority: .userInitiated) {
                 let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
                 guard size <= PDFInbox.maxBytes else { throw PDFInbox.Failure.tooLarge }
                 return try PDFImporter.article(data: Data(contentsOf: file, options: .mappedIfSafe), url: page.url, title: page.title, now: page.sharedAt)
             }.value
-        }
-        if let url = URL(string: page.url), WebPublicationSource.isEconomistShare(url) {
-            return try await economist.sharedArticle(url: url, snapshot: page.html, title: page.title)
+            return (article, nil)
         }
         if let html = page.html,
            let article = try? await ReaderModeExtractor().article(html: html, url: page.url, title: page.title) {
-            return article
+            return (article, nil)
         }
-        guard let url = URL(string: page.url), let host = url.host?.lowercased() else { throw URLError(.badURL) }
-        if MediumDiscovery.isMediumHost(host) {
-            return try await medium.fetchArticle(page.url)
-        }
-        if host == "nytimes.com" || host.hasSuffix(".nytimes.com") {
-            return try await nyt.fetchArticle(page.url)
-        }
-        if url.path.contains("/p/"), let article = try? await substack.fetchPost(canonicalURL: page.url) {
-            return article
-        }
+        guard let url = URL(string: page.url), url.host != nil else { throw URLError(.badURL) }
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
         request.setValue(
             "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
             forHTTPHeaderField: "User-Agent")
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let destination = response.url ?? url
+        var isPDF = response.mimeType?.lowercased() == "application/pdf" || destination.pathExtension.lowercased() == "pdf"
+        if !isPDF, let publisher = SharedPublisher.identify(destination, sharedHTML: nil, substackPublications: settings.substackPublications) {
+            return (try await signedInArticle(publisher, url: destination), publisher)
+        }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
         var data = Data()
-        var isPDF = response.mimeType?.lowercased() == "application/pdf" || url.pathExtension.lowercased() == "pdf"
         for try await byte in bytes {
             if data.count >= (isPDF ? PDFInbox.maxBytes : 4_000_000) { throw URLError(.dataLengthExceedsMaximum) }
             data.append(byte)
@@ -278,11 +284,16 @@ final class SyncCoordinator: ObservableObject {
         }
         if isPDF || PDFInbox.hasPDFHeader(data) {
             let pdf = data
-            return try await Task.detached(priority: .userInitiated) {
+            let article = try await Task.detached(priority: .userInitiated) {
                 try PDFImporter.article(data: pdf, url: page.url, title: page.title, now: page.sharedAt)
             }.value
+            return (article, nil)
         }
-        return try await ReaderModeExtractor().article(html: String(decoding: data, as: UTF8.self), url: page.url, title: page.title)
+        let html = String(decoding: data, as: UTF8.self)
+        if let publisher = SharedPublisher.identify(destination, sharedHTML: html, substackPublications: settings.substackPublications) {
+            return (try await signedInArticle(publisher, url: destination), publisher)
+        }
+        return (try await ReaderModeExtractor().article(html: html, url: destination.absoluteString, title: page.title), nil)
     }
 
     /// The load / lock / off control of one article. The reader follows at the next sync; when it
@@ -335,7 +346,7 @@ final class SyncCoordinator: ObservableObject {
         if service == .economist { settings.economistEnabled = true }
         Task {
             await refreshLoginStatus()
-            if service == .economist { await processSharedInbox() }
+            await processSharedInbox()
             _ = await fetch(reason: "signed in", includeWebSources: true, limitSeconds: 600)
         }
     }

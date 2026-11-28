@@ -1,8 +1,7 @@
 import Foundation
 import PaperboyCore
 
-/// Fetches posts from Substack's own JSON endpoints using the session cookies copied from the
-/// login web view. At most one request per second; a 429 is honoured via Retry-After.
+/// Background discovery uses Substack's paced JSON endpoints. Explicit shares open in WebKit.
 actor SubstackSource {
     private let session: URLSession
     private let limiter = RateLimiter(interval: .seconds(1))
@@ -34,6 +33,13 @@ actor SubstackSource {
             case .previewOnly: return "only the free preview is available to this sign-in"
             }
         }
+    }
+
+    /// Each explicit share gets its own browser navigation, even during an inbox refresh.
+    func fetchSharedArticle(_ url: URL) async throws -> Article {
+        try await SubstackSharedStory.fetch(url, signInToPublication: { host, subdomain in
+            try await SubstackDomainSession.shared.signInForShare(host: host, subdomain: subdomain)
+        }, loadPage: PublicationPage.snapshot)
     }
 
     /// One paced GET. On 429 it waits as told (bounded) and tries once more.
@@ -224,7 +230,8 @@ actor SubstackSource {
                 // Keep the id tied to the URL discovery used, so "already known" stays true.
                 article.url = URLCanonicalizer.canonicalize(candidate.ref.canonicalURL)
                 article = await ArticleImagePipeline.prepare(article)
-                try await store.add(article, load: isFavourite && settings.autoLoadFavourites ? .load : .off)
+                try await store.add(article, load: isFavourite && settings.autoLoadFavourites ? .load : .off,
+                                    publisher: .substack)
                 summary.added += 1
                 AppLog.post("Substack stored: \(article.title) [\(candidate.ref.audience ?? "?")]")
             } catch let error as SubstackError {

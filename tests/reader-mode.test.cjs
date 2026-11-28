@@ -217,3 +217,27 @@ test('Safari persists a content-free access error through the inbox HTML-only ha
     assert.equal(again?.html, undefined);
   }
 });
+
+test('signed-in publication snapshots use visible article text and reject an access screen', () => {
+  for (const [publisher, url] of [['nyt', 'https://www.nytimes.com/2026/11/27/business/story.html'],
+                                  ['medium', 'https://medium.com/@writer/story-0123456789ab']]) {
+    const snapshot = (wall) => {
+      const page = new JSDOM(`<title>City buses</title><article>${reporting}
+        <p style="display:none">A hidden payload</p></article>${wall}`, {url, runScripts:'outside-only'});
+      try {
+        vm.runInContext(fs.readFileSync(path.join(resource, 'ReaderMode.js'), 'utf8'), page.getInternalVMContext());
+        return page.window.paperboySharedStorySnapshot(page.window.document, publisher);
+      } finally { page.window.close(); }
+    };
+    assert.match(snapshot(''), /busiest route/);
+    assert.doesNotMatch(snapshot(''), /A hidden payload/);
+    assert.equal(snapshot('<div data-testid="gateway-content">Subscribe to continue reading</div>'), null);
+  }
+});
+
+test('Safari passes platform metadata for routing custom publication domains', async () => {
+  const page = '<head><meta property="al:ios:app_name" content="Medium"></head><article>' + reporting + '</article>';
+  const shared = await rendered(page, 'safari', 'https://independent.example/piece-0123456789ab');
+  assert.match(shared.publisherMetadata, /al:ios:app_name/);
+  assert.doesNotMatch(shared.publisherMetadata, /busiest route/);
+});
